@@ -1,0 +1,173 @@
+# SubSniper configuration
+# Copy to config.yaml and edit. Credentials do NOT go here - they go in .env
+
+frontline:
+  # Your district's Frontline sign-in URL. Most districts use the shared one below.
+  # If your district uses a custom SSO portal, put that URL here instead.
+  login_url: "https://app.frontlineeducation.com/"
+
+  # The page that lists available jobs. Run `python -m subsniper discover` to confirm.
+  jobs_url: "https://app.frontlineeducation.com/select/absencemanagement/substitute"
+
+  # Endpoint paths discovered via tools/capture.js. Leave as null to use DOM scraping
+  # fallback (slower but works without discovery).
+  available_jobs_endpoint: null   # e.g. "/api/v1/substitute/availablejobs"
+  accept_endpoint: null           # e.g. "/api/v1/substitute/job/{job_id}/accept"
+
+  # Seconds to wait for the login flow to settle before first poll
+  login_settle_seconds: 8
+
+polling:
+  # Adaptive intervals. Times are LOCAL to the machine running this.
+  # Jobs get posted in bursts; poll hard during those windows, back off otherwise.
+  # This keeps total daily request volume reasonable while beating 60s competitors
+  # exactly when it matters.
+  windows:
+    - name: "early-morning-rush"
+      days: [mon, tue, wed, thu, fri]
+      start: "05:00"
+      end: "08:30"
+      interval_seconds: 5
+
+    - name: "afternoon-postings"
+      days: [mon, tue, wed, thu, fri]
+      start: "14:00"
+      end: "18:00"
+      interval_seconds: 10
+
+    - name: "evening"
+      days: [sun, mon, tue, wed, thu]
+      start: "18:00"
+      end: "22:00"
+      interval_seconds: 20
+
+  # Everything outside the windows above
+  default_interval_seconds: 120
+
+  # Random +/- jitter as a fraction of the interval. Avoids a perfectly regular
+  # request cadence, which is the easiest possible bot signature to detect.
+  jitter_fraction: 0.25
+
+  # Back off exponentially on errors instead of hammering a failing endpoint
+  error_backoff_seconds: 30
+  error_backoff_max_seconds: 900
+
+  # Re-authenticate after this many consecutive auth failures
+  reauth_after_auth_failures: 2
+
+
+filters:
+  # ---- Role / position filtering -------------------------------------------
+  # A job must match at least one `include` pattern AND zero `exclude` patterns.
+  # Patterns are case-insensitive regex matched against the job's position/title
+  # field. Tune these once you see real listings in the audit log.
+  role:
+    include:
+      - "teacher"
+      - "\\bteach\\b"
+      - "instructor"
+    exclude:
+      - "principal"
+      - "assistant principal"
+      - "\\bAP\\b"
+      - "superintendent"
+      - "director"
+      - "coordinator"
+      - "counselor"
+      - "nurse"
+      - "secretary"
+      - "clerk"
+      - "custodian"
+      - "\\baide\\b"
+      - "paraprofessional"
+      - "\\bpara\\b"
+      - "food service"
+      - "cafeteria"
+      - "bus driver"
+      - "security"
+      - "librarian"
+      - "psychologist"
+      - "speech"
+      - "therapist"
+      - "coach"
+
+  # ---- Time filtering ------------------------------------------------------
+  time:
+    # Job must START no earlier than this
+    earliest_start: "07:00"
+    # Job must END no later than this
+    latest_end: "16:00"
+    # Reject jobs shorter/longer than these (minutes). null disables the check.
+    min_duration_minutes: 180
+    max_duration_minutes: null
+    # Only accept jobs falling on these weekdays
+    allowed_weekdays: [mon, tue, wed, thu, fri]
+    # Don't accept anything starting less than this many minutes from now
+    min_lead_time_minutes: 30
+
+  # ---- Location filtering --------------------------------------------------
+  location:
+    # If non-empty, ONLY these schools are eligible (case-insensitive substring).
+    allowlist: []
+    # Always reject these schools.
+    denylist: []
+
+
+autoaccept:
+  # MASTER SWITCH. Leave true until you've watched the audit log for a few days
+  # and confirmed it's matching exactly what you'd have picked by hand.
+  # In dry-run, SubSniper notifies on matches but never actually accepts.
+  dry_run: true
+
+  # Hard ceiling on accepts. Protects against a filter bug committing Nick
+  # to a week of work in one morning.
+  max_accepts_per_day: 2
+  max_accepts_per_run: 1
+
+  # Refuse to accept a job that overlaps a job already accepted through SubSniper.
+  prevent_overlap: true
+
+  # If this file exists in the project root, ALL accepts are blocked immediately
+  # (notifications still fire). Create it to pause without stopping the service:
+  #   touch STOP
+  kill_switch_file: "STOP"
+
+  # Optional inverse: require this file to exist before any accept is allowed.
+  # Set to null to disable. Useful for "only arm it on days I want work."
+  arm_file: null
+
+
+notifications:
+  provider: pushover
+
+  pushover:
+    # Priority 2 = Emergency: bypasses Do Not Disturb, repeats until acknowledged.
+    # Used when a job is actually ACCEPTED - Nick needs to know he's committed.
+    accepted_priority: 2
+    accepted_retry_seconds: 60      # repeat every 60s
+    accepted_expire_seconds: 600    # for up to 10 min or until acknowledged
+    accepted_sound: "persistent"
+
+    # Priority 1 = High: bypasses quiet hours but doesn't nag.
+    # Used for matched-but-not-accepted (dry run, cap hit, kill switch).
+    matched_priority: 1
+    matched_sound: "pushover"
+
+    # Priority -1 = Low: no sound. Used for errors/health so they don't wake anyone.
+    error_priority: -1
+
+  # Notify about non-matching jobs too? Noisy, but useful for the first few days
+  # while tuning filters. Sent at priority -1.
+  notify_on_nonmatching: false
+
+  # Send a daily heartbeat so silence is distinguishable from a dead service
+  daily_heartbeat: true
+  daily_heartbeat_time: "04:45"
+
+
+logging:
+  level: INFO
+  # Every decision (job seen, filter result, accept attempt) lands here as JSONL.
+  # This is your source of truth when tuning filters.
+  audit_file: "logs/audit.jsonl"
+  app_file: "logs/subsniper.log"

@@ -1,0 +1,9 @@
+.env
+config.yaml
+state/
+logs/
+STOP
+ARMED
+__pycache__/
+*.pyc
+.venv/
