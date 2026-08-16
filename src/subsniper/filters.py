@@ -1,11 +1,11 @@
-"""Filter engine: decides whether a job is one Nick actually wants.
+"""Filter engine: decides whether a job is one you actually want.
 
 Every check returns a reason string on rejection. Those reasons go straight
 into the audit log, which is what makes filter tuning tractable - you can see
 exactly why a job you wanted got skipped.
 
 Design rule: when data is missing or unparseable, REJECT rather than accept.
-A false negative costs one missed job. A false positive commits Nick to work
+A false negative costs one missed job. A false positive commits you to work
 he can't do.
 """
 

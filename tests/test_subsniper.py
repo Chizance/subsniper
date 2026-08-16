@@ -1,4 +1,4 @@
-"""Tests for the parts where a bug costs Nick real money or a real commitment.
+"""Tests for the parts where a bug costs real money or a real commitment.
 
 Priorities, in order:
   1. Auto-accept never fires when it shouldn't (dry run, caps, kill switch).
@@ -56,10 +56,10 @@ def test_parses_every_job_row(jobs):
 
 
 def test_parses_fields_off_the_real_schema(jobs):
-    job = _by_school(jobs, "Ygnacio Valley")
+    job = _by_school(jobs, "Riverside")
     assert job.title == "Teacher, Grade 9 English"
     assert job.employee == "Rebecca Alvarez"
-    assert job.school == "Ygnacio Valley High School"
+    assert job.school == "Riverside High School"
     assert job.start_dt == datetime(2026, 8, 17, 8, 0)
     assert job.end_dt == datetime(2026, 8, 17, 15, 0)
     assert job.duration_minutes == 420
@@ -67,7 +67,7 @@ def test_parses_fields_off_the_real_schema(jobs):
 
 
 def test_multiday_job_uses_end_date(jobs):
-    job = _by_school(jobs, "Pleasant Hill")
+    job = _by_school(jobs, "Cedar")
     assert job.start_dt.date() == datetime(2026, 8, 25).date()
     assert job.end_dt.date() == datetime(2026, 8, 27).date()
 
@@ -95,12 +95,12 @@ def test_detects_logged_out_page():
 @pytest.mark.parametrize(
     "school,should_match",
     [
-        ("Ygnacio Valley", True),    # Teacher, Grade 9 English
-        ("Northgate", False),        # Assistant Principal
-        ("Valle Verde", False),      # Instructional Aide
-        ("Meadow Homes", False),     # School Nurse
-        ("Bel Air", False),          # empty title -> fail closed
-        ("Riverview", True),         # teacher w/ "Principal's Office" in notes
+        ("Riverside", True),    # Teacher, Grade 9 English
+        ("Hillcrest", False),        # Assistant Principal
+        ("Oakdale", False),      # Instructional Aide
+        ("Willow", False),     # School Nurse
+        ("Maple", False),          # empty title -> fail closed
+        ("Stonebridge", True),         # teacher w/ "Principal's Office" in notes
     ],
 )
 def test_role_filter(jobs, cfg, school, should_match):
@@ -115,7 +115,7 @@ def test_role_matching_ignores_notes_and_employee_name(jobs, cfg):
     employee surnamed Coach, must still match. Both words are on the exclude
     list; neither belongs to the role.
     """
-    job = _by_school(jobs, "Riverview")
+    job = _by_school(jobs, "Stonebridge")
     assert "Principal" in job.notes or "Principal" in job.searchable_text
     assert "Coach" in job.employee
     assert job.role_text == "Teacher, Grade 6 Science"
@@ -123,7 +123,7 @@ def test_role_matching_ignores_notes_and_employee_name(jobs, cfg):
 
 
 def test_untitled_job_fails_closed(jobs, cfg):
-    job = _by_school(jobs, "Bel Air")
+    job = _by_school(jobs, "Maple")
     result = filters.evaluate(job, cfg)
     assert not result.matched
     assert "failing closed" in result.reason_text
@@ -134,10 +134,10 @@ def test_untitled_job_fails_closed(jobs, cfg):
 @pytest.mark.parametrize(
     "school,fragment",
     [
-        ("Concord High", "before earliest_start"),
-        ("College Park", "after latest_end"),
-        ("Mt. Diablo Elementary", "under minimum"),
-        ("Olympic Continuation", "not in allowed_weekdays"),
+        ("Fairview High", "before earliest_start"),
+        ("Lakeview", "after latest_end"),
+        ("Brookside Elementary", "under minimum"),
+        ("Summit Continuation", "not in allowed_weekdays"),
     ],
 )
 def test_time_filter_reasons(jobs, cfg, school, fragment):
@@ -177,7 +177,7 @@ def test_collects_all_failure_reasons_not_just_the_first(cfg):
 # -- overlap detection ---------------------------------------------------------
 
 def test_overlapping_jobs_detected(jobs):
-    a = _by_school(jobs, "Ygnacio Valley")           # Mon 8/17 8:00-15:00
+    a = _by_school(jobs, "Riverside")           # Mon 8/17 8:00-15:00
     b = Job.from_payload({
         "id": "clash", "positionName": "Teacher, Art",
         "startDate": "8/17/2026", "startTime": "1:00 PM", "endTime": "4:00 PM",
@@ -186,8 +186,8 @@ def test_overlapping_jobs_detected(jobs):
 
 
 def test_non_overlapping_jobs_not_flagged(jobs):
-    a = _by_school(jobs, "Ygnacio Valley")           # Mon 8/17
-    b = _by_school(jobs, "Northgate")                # Tue 8/18
+    a = _by_school(jobs, "Riverside")           # Mon 8/17
+    b = _by_school(jobs, "Hillcrest")                # Tue 8/18
     assert not a.overlaps(b)
 
 

@@ -44,8 +44,8 @@ polling:
   # Everything outside the windows above
   default_interval_seconds: 120
 
-  # Random +/- jitter as a fraction of the interval. Avoids a perfectly regular
-  # request cadence, which is the easiest possible bot signature to detect.
+  # Random +/- jitter as a fraction of the interval. Spreads requests out instead
+  # of firing them on a metronome, which is easier on Frontline's servers.
   jitter_fraction: 0.25
 
   # Back off exponentially on errors instead of hammering a failing endpoint
@@ -119,7 +119,7 @@ autoaccept:
   # In dry-run, SubSniper notifies on matches but never actually accepts.
   dry_run: true
 
-  # Hard ceiling on accepts. Protects against a filter bug committing Nick
+  # Hard ceiling on accepts. Protects against a filter bug committing you
   # to a week of work in one morning.
   max_accepts_per_day: 2
   max_accepts_per_run: 1
@@ -142,7 +142,7 @@ notifications:
 
   pushover:
     # Priority 2 = Emergency: bypasses Do Not Disturb, repeats until acknowledged.
-    # Used when a job is actually ACCEPTED - Nick needs to know he's committed.
+    # Used when a job is actually ACCEPTED - you need to know you're committed.
     accepted_priority: 2
     accepted_retry_seconds: 60      # repeat every 60s
     accepted_expire_seconds: 600    # for up to 10 min or until acknowledged

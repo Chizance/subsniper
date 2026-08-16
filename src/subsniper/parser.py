@@ -1,8 +1,9 @@
 """Parse Frontline's server-rendered job table into Job objects.
 
-Schema captured live from Mount Diablo USD's Absence Management instance
-(legacy Aesop, absencesub.frontlineeducation.com) on 2026-08-16 by reading
-the page's own `#jobTemplate` client-side template.
+Schema captured from a live Absence Management instance (legacy Aesop,
+absencesub.frontlineeducation.com) by reading the page's own `#jobTemplate`
+client-side template. Districts vary; verify against your own with
+`python -m subsniper check`.
 
 Row structure inside `#availableJobs table.jobList`:
 

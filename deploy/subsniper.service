@@ -6,7 +6,7 @@
 #
 # Then watch it with:  journalctl -u subsniper -f
 #
-# Edit User= and the two paths below to match the machine.
+# Edit User= and the paths below to match your machine.
 
 [Unit]
 Description=SubSniper - Frontline substitute job poller
@@ -15,11 +15,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=nick
-WorkingDirectory=/home/nick/subsniper
-Environment=PYTHONPATH=/home/nick/subsniper/src
+User=CHANGE_ME
+WorkingDirectory=/opt/subsniper
+Environment=PYTHONPATH=/opt/subsniper/src
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/home/nick/subsniper/.venv/bin/python -m subsniper run
+ExecStart=/opt/subsniper/.venv/bin/python -m subsniper run
 
 # Always come back up. A poller that dies at 4am and stays dead is the whole
 # failure mode this project exists to avoid.
@@ -36,7 +36,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/nick/subsniper
+ReadWritePaths=/opt/subsniper
 
 [Install]
 WantedBy=multi-user.target

@@ -36,7 +36,7 @@ SubSniper attacks both halves of that:
 ## Read this before you run it
 
 **This almost certainly violates Frontline's Terms of Service.** Automated
-access and automated accepting are not sanctioned. The realistic risk is Nick's
+access and automated accepting are not sanctioned. The realistic risk is your
 account getting rate-limited, flagged, or locked, and a locked account means no
 sub jobs at all. That's a real cost, so a few things are deliberately built in:
 
@@ -47,7 +47,7 @@ sub jobs at all. That's a real cost, so a few things are deliberately built in:
   request cadence is the single easiest bot signature to spot.
 - The config **refuses to start** with an interval under 3 seconds.
 
-**Auto-accept commits Nick to real work.** A filter mistake books a job he has
+**Auto-accept commits you to real work.** A filter mistake books a job you have
 to actually show up for, or call in to cancel. This ships with `dry_run: true`
 and it should stay that way for at least a week.
 
@@ -137,7 +137,7 @@ grep job_skipped logs/audit.jsonl | tail -20
 grep job_matched logs/audit.jsonl | tail -20
 ```
 
-Every skip records its reason. If Nick sees a job he wanted get skipped, the
+Every skip records its reason. If you see a job you wanted get skipped, the
 reason string names the exact setting to change.
 
 You can also replay a saved page offline — no network, no accepts:
@@ -178,7 +178,7 @@ rm STOP        # accepting on
 ```
 
 **Arm file** (opt-in inverse) — set `arm_file: ARMED` and accepting only happens
-on days Nick runs `touch ARMED`. Good for "only auto-accept when I actually want
+on days you run `touch ARMED`. Good for "only auto-accept when I actually want
 work."
 
 Check state any time:
@@ -240,7 +240,7 @@ Row schema was captured from the live site by reading the page's own
 ## Design rule
 
 **When data is missing or unparseable, reject.** A false negative costs one
-missed job. A false positive commits Nick to work he can't do. So a listing with
+missed job. A false positive commits you to work you can't do. So a listing with
 no position title, or an unparseable start time, is always skipped — never
 accepted on the assumption it's fine.
 
@@ -265,7 +265,7 @@ that the config refuses a sub-3-second poll interval.
 Pushover keys.
 
 **"login did not produce an authenticated session."** Usually a district SSO
-portal. Set `frontline.login_url` to the portal Nick actually uses. If the
+portal. Set `frontline.login_url` to the portal you actually use. If the
 district requires a PIN, fill `FRONTLINE_PIN` in `.env`.
 
 **Matching nothing.** Run `check` during a window when jobs are posted. If real

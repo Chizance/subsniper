@@ -2,7 +2,7 @@
 
 Priority tiers are deliberate:
   2 (Emergency) - job ACCEPTED. Bypasses Do Not Disturb and repeats until
-      acknowledged, because Nick is now committed to work and needs to know.
+      acknowledged, because you are now committed to work and need to know.
   1 (High)      - job MATCHED but not accepted (dry run, cap reached, kill
       switch on). Bypasses quiet hours, doesn't nag.
  -1 (Low)       - errors and heartbeats. Silent; won't wake anyone at 4am.
