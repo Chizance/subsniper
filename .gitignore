@@ -7,3 +7,5 @@ ARMED
 __pycache__/
 *.pyc
 .venv/
+*.egg-info/
+Start SubSniper.bat

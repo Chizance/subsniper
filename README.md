@@ -1,277 +1,325 @@
 # SubSniper
 
-A faster replacement for SubAlert. Polls Frontline Absence Management for newly
-posted substitute jobs, pushes them to your phone through Pushover, and can
-auto-accept the ones matching your rules.
+**Get told about substitute jobs seconds after they're posted — and grab them automatically.**
+
+SubSniper watches your Frontline Absence Management account and sends an alert to
+your phone the moment a new job appears. If the job matches the rules you set
+(the right hours, an actual teaching job), it can accept it for you before
+anyone else has finished reading their notification.
+
+Download it here: **https://github.com/Chizance/subsniper**
 
 ---
 
-## Why this is faster
+## Why you keep losing jobs
 
-Every existing tool in this space polls Frontline **once every 60 seconds**:
+It probably isn't you being slow.
 
-| Tool | Poll interval | Auto-accept | Cost |
-|---|---|---|---|
-| SubAlert | 60s | No | $4.95–6.95/mo |
-| SubSidekick | 60s | No | $9.99/mo |
-| Jobulator (Frontline's own) | 60s | No | Paid |
-| **SubSniper** | **5s in the morning rush** | **Yes** | Free |
+Every alert app checks Frontline **once a minute** — SubAlert, SubSidekick, and
+even Frontline's own Jobulator app. That means:
 
-So SubAlert isn't malfunctioning — a 60-second loop means you learn about a job
-**30 seconds after posting on average, up to 60 seconds worst case**. Then you
-still have to wake up, unlock your phone, and tap. Meanwhile every other
-SubAlert subscriber got the identical alert at the identical moment, which turns
-it into a pure reaction-time race you'll usually lose.
+- A job gets posted.
+- Up to **60 seconds** go by before the app notices it.
+- Everyone using that app gets buzzed at the *exact same moment*.
+- Now it's a race between however many people are awake and holding their phone.
 
-SubSniper attacks both halves of that:
+So by the time your phone lights up, you're already a minute late and competing
+with everyone else who got the same alert simultaneously.
 
-1. **Detection.** A 5-second poll during the morning window cuts average
-   detection lag from ~30s to ~2.5s. Measured against the live site, one poll
-   costs **118ms**.
-2. **Reaction.** Auto-accept removes human reaction time from the loop
-   entirely — the accept click fires before a person could have read the alert.
+SubSniper checks **every 5 seconds** during the morning rush, so it spots the
+job almost immediately. And because it can accept the job itself, there's no
+waking up, unlocking, and tapping — it's done before a person could react.
 
 ---
 
-## Read this before you run it
+## Before you start
 
-**This almost certainly violates Frontline's Terms of Service.** Automated
-access and automated accepting are not sanctioned. The realistic risk is your
-account getting rate-limited, flagged, or locked, and a locked account means no
-sub jobs at all. That's a real cost, so a few things are deliberately built in:
+You'll need:
 
-- Polling is **windowed** — hard only during posting windows, slow otherwise. A
-  flat 5-second poll would be ~17,000 requests/day; the shipped config is closer
-  to ~4,000, which is a far less conspicuous footprint.
-- Every interval carries **±25% random jitter**, because a perfectly regular
-  request cadence is the single easiest bot signature to spot.
-- The config **refuses to start** with an interval under 3 seconds.
+- **A Windows computer that stays turned on overnight.** This is the big one.
+  Jobs get posted around 5am, and a sleeping laptop can't watch for anything. A
+  desktop that's always on is ideal.
+- **Your Frontline username and password.**
+- **A phone** (iPhone or Android).
+- **About $5** for the Pushover app, one time, not a subscription.
+- **About 20 minutes** for setup.
 
-**Auto-accept commits you to real work.** A filter mistake books a job you have
-to actually show up for, or call in to cancel. This ships with `dry_run: true`
-and it should stay that way for at least a week.
+You do **not** need to know anything about programming. You'll type a few
+commands exactly as written, and fill in two files that look like forms.
+
+---
+
+## Please read this part
+
+**This breaks Frontline's rules.** They don't allow apps to log in automatically
+or accept jobs for you. Nobody is likely to come after you personally, but the
+realistic risk is that **your Frontline account gets locked** — and then you get
+no jobs at all, which is worse than where you started. SubSniper is built to be
+careful and quiet about it, but the risk isn't zero. That's your call to make.
+
+**Auto-accepting means you're actually booked.** If your settings are wrong, it
+can accept a job you can't work, and you'll have to call the school and cancel.
+Because of that, SubSniper starts in **practice mode** — it sends alerts but
+never accepts anything. Leave it that way for about a week and check that it's
+picking the jobs you'd have picked yourself. Only then turn accepting on.
 
 ---
 
 ## Setup
 
-### 1. Install
+### Step 1 — Install Python
 
-```bash
-git clone <wherever you put this> subsniper
-cd subsniper
+SubSniper is written in a language called Python, so your computer needs it.
 
-python3 -m venv .venv
-source .venv/bin/activate            # Windows: .venv\Scripts\activate
+Go to **https://www.python.org/downloads/** and click the big yellow download
+button. Run the installer.
 
-pip install -r requirements.txt
-playwright install chromium
+⚠️ **On the very first screen, tick the box that says "Add python.exe to PATH"**
+before clicking Install. It's easy to miss and nothing will work without it. If
+you miss it, just run the installer again and tick it.
+
+### Step 2 — Download SubSniper
+
+Go to **https://github.com/Chizance/subsniper**, click the green **Code**
+button, then **Download ZIP**.
+
+Right-click the downloaded file → **Extract All**. Put the folder somewhere you
+can find it again, like `C:\SubSniper`.
+
+### Step 3 — Run the setup
+
+Open the folder. Right-click the file called **`setup.ps1`** and choose **Run
+with PowerShell**.
+
+A window opens and does everything for you — it downloads what's needed and
+creates your settings files. It takes a few minutes; the browser download near
+the end is large, so let it finish.
+
+> If Windows says running scripts is disabled, open the folder, click the
+> address bar at the top, type `powershell` and press Enter. Then paste this and
+> press Enter:
+> `powershell -ExecutionPolicy Bypass -File setup.ps1`
+
+When it's done it opens a file called `.env` in Notepad. Leave that open —
+that's Step 5.
+
+### Step 4 — Set up notifications on your phone
+
+SubSniper sends alerts through an app called **Pushover**. It's reliable and it
+can override silent mode, which matters a lot at 5am.
+
+1. Go to **https://pushover.net** and create an account.
+2. After logging in, you'll see **Your User Key** — a long string of letters and
+   numbers. Copy it.
+3. Scroll down to **Your Applications** and click **Create an Application/API
+   Token**. Name it `SubSniper`, agree to the terms, click Create. It gives you
+   an **API Token**. Copy that too.
+4. Install the **Pushover** app on your phone and sign in. It costs $5 once.
+
+Keep both of those codes handy for the next step.
+
+### Step 5 — Fill in your details
+
+In the Notepad window that opened, fill in the blanks after each `=` sign. Don't
+add spaces or quotation marks — just type right after the equals sign:
+
+```
+FRONTLINE_USERNAME=your.frontline.username
+FRONTLINE_PASSWORD=your-frontline-password
+FRONTLINE_PIN=
+PUSHOVER_USER_KEY=the-user-key-you-copied
+PUSHOVER_API_TOKEN=the-api-token-you-copied
 ```
 
-### 2. Credentials
+Leave `FRONTLINE_PIN` blank unless your district makes you type a PIN when you
+log in. **Save the file** (Ctrl+S) and close Notepad.
 
-```bash
-cp .env.example .env
-chmod 600 .env                       # Windows: skip
+This file stays on your computer only. It is never uploaded anywhere, and it's
+specifically excluded from the public code.
+
+### Step 6 — Check that it works
+
+Open the SubSniper folder, click the address bar at the top of the window, type
+`powershell`, and press Enter. A blue window opens. Paste this and press Enter:
+
+```
+.venv\Scripts\python.exe -m subsniper test-notify
 ```
 
-Fill in `.env`. Frontline credentials and Pushover keys live here and **nowhere
-else** — not in `config.yaml`, not in chat, not in the repo. `.env` is
-gitignored.
+**Your phone should buzz.** If it does, notifications are working.
 
-For Pushover: sign up at [pushover.net](https://pushover.net), install the app
-(**$5 one-time per platform**), copy your **user key** from the dashboard, then
-create an Application/API Token named "SubSniper" and copy that too.
+Now check Frontline:
 
-### 3. Config
-
-```bash
-cp config.example.yaml config.yaml
+```
+.venv\Scripts\python.exe -m subsniper check
 ```
 
-Then verify Pushover and Frontline both work:
+This logs into your account, lists any jobs currently posted, and shows whether
+each one matches your rules. It doesn't accept anything. If it says it logged in
+successfully, you're set.
 
-```bash
-python -m subsniper test-notify   # should buzz the phone
-python -m subsniper check         # logs in, lists jobs, changes nothing
-```
+### Step 7 — Start it
 
-`check` prints every currently-posted job and whether it would match — the
-fastest way to sanity-check filters against reality.
+Double-click **`Start SubSniper.bat`** in the folder.
+
+A window opens and stays open. **That window has to stay open** for SubSniper to
+keep watching — minimize it, don't close it. Leave the computer on overnight.
+
+That's it. You'll get a quiet "still running" notification each morning at 4:45,
+and a loud one whenever a matching job appears.
 
 ---
 
-## Tuning the filters
+## Setting your preferences
 
-The two that matter are in `config.yaml`.
+Open **`config.yaml`** in the SubSniper folder with Notepad. Most of it you can
+ignore. These are the parts worth changing:
 
-**Time window:**
+**What hours you'll work** — find the section that looks like this:
 
 ```yaml
-filters:
-  time:
     earliest_start: "07:00"
     latest_end: "16:00"
     min_duration_minutes: 180
+```
+
+- `earliest_start` — won't take anything starting before this time
+- `latest_end` — won't take anything ending after this time
+- `min_duration_minutes` — skips short jobs (180 = three hours)
+
+Times use a 24-hour clock: `07:00` is 7am, `16:00` is 4pm. Keep the quotation
+marks.
+
+**Which days** — remove any day you don't want:
+
+```yaml
     allowed_weekdays: [mon, tue, wed, thu, fri]
-    min_lead_time_minutes: 30    # don't accept something starting in 10 minutes
 ```
 
-**Teacher-only:** a job must match one `include` pattern and zero `exclude`
-patterns (case-insensitive regex). The shipped `exclude` list covers principal,
-AP, counselor, nurse, aide, paraprofessional, custodian, clerk, librarian,
-psychologist, speech, therapist, coach, and more.
+**Teaching jobs only** — this is already set up. SubSniper only takes jobs whose
+title mentions *teacher*, *teach*, or *instructor*, and it throws out principal,
+assistant principal, counselor, nurse, aide, paraprofessional, custodian, clerk,
+librarian, psychologist, speech, therapist, coach, and others.
 
-Role matching reads **only the position title** — never the notes or the absent
-employee's name. That's deliberate: a job whose notes say *"report to the
-Principal's Office"*, or one covering a teacher surnamed *Coach*, would
-otherwise be thrown out. There's a regression test pinning this exact case.
+**Particular schools** — if there are schools you won't drive to, add them to the
+`denylist`. If you *only* want certain schools, put those in the `allowlist`
+instead:
 
-After a few days, tune against the audit log rather than guessing:
-
-```bash
-# what got skipped and why
-grep job_skipped logs/audit.jsonl | tail -20
-
-# what matched
-grep job_matched logs/audit.jsonl | tail -20
+```yaml
+  location:
+    allowlist: []
+    denylist: ["Some School Name"]
 ```
 
-Every skip records its reason. If you see a job you wanted get skipped, the
-reason string names the exact setting to change.
-
-You can also replay a saved page offline — no network, no accepts:
-
-```bash
-python -m subsniper replay tests/fixtures/available_jobs.html
-```
+Save the file. **Restart SubSniper** (close the window, double-click
+`Start SubSniper.bat` again) for changes to take effect.
 
 ---
 
-## Going live
+## Turning on auto-accept
 
-Only after a week of watching `logs/audit.jsonl` and agreeing with every match:
+**Don't do this on day one.** Run it in practice mode for about a week first.
+
+Each time SubSniper finds a matching job it sends you an alert saying *"DRY RUN —
+Would accept."* Read those. If for a week straight it's flagging jobs you'd
+genuinely have taken, and not flagging ones you wouldn't, your settings are good.
+
+Then open `config.yaml`, find:
 
 ```yaml
 autoaccept:
-  dry_run: false
+  dry_run: true
+```
+
+Change `true` to `false`. Save, and restart SubSniper.
+
+Right below it is a safety limit:
+
+```yaml
   max_accepts_per_day: 2
 ```
 
-The accept path runs a fixed gauntlet, and every branch is logged:
+That's the most jobs it will ever book in one day. Even if something goes badly
+wrong, it can't sign you up for a whole week.
 
-1. kill switch present → notify only
-2. arm file required but missing → notify only
-3. `dry_run` on → notify only
-4. already accepted this job → skip
-5. per-run cap reached → notify only
-6. per-day cap reached → notify only
-7. overlaps an already-accepted job → notify only
-8. → accept
+### The stop switch
 
-**Kill switch.** Stops all accepting immediately, without stopping the service.
-Notifications keep coming.
+To stop it accepting jobs *right now* without shutting anything down — say
+you're sick, or you already have plans — create an empty file named **`STOP`**
+(no file extension) in the SubSniper folder.
 
-```bash
-touch STOP     # accepting off
-rm STOP        # accepting on
-```
+Easiest way: in the SubSniper folder, right-click → New → Text Document, then
+rename it to exactly `STOP` and confirm when Windows warns you about changing the
+extension.
 
-**Arm file** (opt-in inverse) — set `arm_file: ARMED` and accepting only happens
-on days you run `touch ARMED`. Good for "only auto-accept when I actually want
-work."
-
-Check state any time:
-
-```bash
-python -m subsniper status
-```
+While `STOP` exists, you still get alerts but nothing is ever accepted. Delete
+the file to turn accepting back on.
 
 ---
 
-## Running it 24/7
+## What the alerts look like
 
-The machine must be **awake** at 5am. A sleeping laptop polls nothing.
+| Alert | Means |
+|---|---|
+| **ACCEPTED: Teacher, Grade 5** | You're booked. Repeats until you tap it. |
+| **DRY RUN — Would accept** | Practice mode. It matched, nothing was booked. |
+| **Job matched (not accepted)** | Matched, but the daily limit or STOP file blocked it. |
+| **SubSniper is running** | Silent daily check-in at 4:45am. Everything's fine. |
+| **SubSniper error** | Something's wrong — see below. |
 
-**Windows** (run once, elevated):
+If the 4:45am check-in stops arriving, SubSniper isn't running anymore. Usually
+that means the computer restarted or the window got closed.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File deploy\install_windows.ps1
-powercfg /change standby-timeout-ac 0      # stop it sleeping while plugged in
+---
+
+## When something goes wrong
+
+**Phone never buzzes.** Run the `test-notify` command from Step 6. If it fails,
+your Pushover keys are wrong — recopy them from pushover.net, watching for extra
+spaces.
+
+**"Login did not produce an authenticated session."** SubSniper couldn't get
+into Frontline. Check your username and password by logging in manually in a
+browser. If your district makes you enter a PIN, add it to `FRONTLINE_PIN` in
+`.env`. If your district uses its own login page rather than Frontline's, that
+address needs to go in `config.yaml` under `login_url` — ask whoever set this up
+for you.
+
+**It never finds anything.** Run the `check` command during a time jobs are
+normally posted. For each job it prints the reason it was skipped — usually the
+hours in `config.yaml` are narrower than the jobs actually being offered.
+
+**It's finding jobs but never accepting.** Almost always `dry_run` is still set
+to `true`, or a `STOP` file is sitting in the folder.
+
+**"Job row no longer present."** Someone accepted it first. Normal occasionally.
+If it's every single time, something's slow — worth looking at.
+
+**Nothing works after a Windows restart.** SubSniper doesn't restart itself
+unless it's installed as a scheduled task. Just double-click
+`Start SubSniper.bat` again. To make it automatic, right-click
+`deploy\install_windows.ps1` → Run with PowerShell (needs admin).
+
+---
+
+## Keeping the computer awake
+
+Windows going to sleep stops SubSniper. To prevent that while it's plugged in,
+open PowerShell and run:
+
+```
+powercfg /change standby-timeout-ac 0
 ```
 
-**Linux** — edit the paths and user in `deploy/subsniper.service`, then:
-
-```bash
-sudo cp deploy/subsniper.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now subsniper
-journalctl -u subsniper -f
-```
-
-Both configs restart automatically on crash. A daily heartbeat push at 04:45
-(silent, priority -1) confirms it's alive — if that stops arriving, it's dead.
+Also worth checking Settings → System → Power that the screen can sleep but the
+computer doesn't.
 
 ---
 
-## How it works
+## For developers
 
-**Detection (hot path).** Frontline's substitute portal is a legacy ASP.NET app;
-jobs are server-rendered into `#availableJobs table.jobList` on
-`/Substitute/Home`. There is no JSON API. SubSniper issues an authenticated
-same-origin `fetch` from inside the logged-in browser context and parses the
-HTML. No rendering, no navigation — 118ms per poll.
+Architecture notes, measurements, and design rationale are in
+[docs/TECHNICAL.md](docs/TECHNICAL.md). Tests: `python -m pytest tests/ -q`.
 
-**Accept (correctness path).** Navigates the real page and clicks the real
-`.acceptButton`, rather than synthesizing a POST. Slower (~2s) but it inherits
-CSRF tokens and Frontline's own click handlers, so it stays correct when they
-change things.
-
-**Session.** Playwright persistent context, so the login survives restarts —
-re-login is the most fragile step in the pipeline and this avoids it.
-
-Row schema was captured from the live site by reading the page's own
-`#jobTemplate`: `.title` (role), `.name`, `.itemDate`, `.multiEndDate`,
-`.startTime`, `.endTime`, `.durationName`, `.tenantName`, `.locationName`,
-`.confNum`, `.acceptButton`.
-
----
-
-## Design rule
-
-**When data is missing or unparseable, reject.** A false negative costs one
-missed job. A false positive commits you to work you can't do. So a listing with
-no position title, or an unparseable start time, is always skipped — never
-accepted on the assumption it's fine.
-
----
-
-## Tests
-
-```bash
-python -m pytest tests/ -q
-```
-
-31 tests, covering parsing against the real DOM schema, every filter rejection
-path, overlap detection, and the safety rails — including that `dry_run`
-defaults to on, that dry-run records never consume the real daily budget, and
-that the config refuses a sub-3-second poll interval.
-
----
-
-## Troubleshooting
-
-**No notifications.** `python -m subsniper test-notify`. If that fails it's the
-Pushover keys.
-
-**"login did not produce an authenticated session."** Usually a district SSO
-portal. Set `frontline.login_url` to the portal you actually use. If the
-district requires a PIN, fill `FRONTLINE_PIN` in `.env`.
-
-**Matching nothing.** Run `check` during a window when jobs are posted. If real
-jobs show as `skip`, the printed reason names the setting to change. Setting
-`notifications.notify_on_nonmatching: true` for a day or two shows everything
-being filtered out.
-
-**Accepts failing with "job row no longer present."** Someone beat us to it.
-If it's constant, drop the morning `interval_seconds` to 3.
+MIT licensed. Not affiliated with, endorsed by, or supported by Frontline
+Education.
