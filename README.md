@@ -88,17 +88,15 @@ can find it again, like `C:\SubSniper`.
 
 ### Step 3 — Run the setup
 
-Open the folder. Right-click the file called **`setup.ps1`** and choose **Run
-with PowerShell**.
+Open the folder and **double-click `Setup SubSniper.bat`**.
 
 A window opens and does everything for you — it downloads what's needed and
 creates your settings files. It takes a few minutes; the browser download near
 the end is large, so let it finish.
 
-> If Windows says running scripts is disabled, open the folder, click the
-> address bar at the top, type `powershell` and press Enter. Then paste this and
-> press Enter:
-> `powershell -ExecutionPolicy Bypass -File setup.ps1`
+> Use the `.bat`, not `setup.ps1` directly. Windows silently blocks PowerShell
+> scripts extracted from a downloaded zip — the window just closes with no
+> message. The `.bat` handles that.
 
 When it's done it opens a file called `.env` in Notepad. Leave that open —
 that's Step 5.
@@ -274,8 +272,8 @@ that means the computer restarted or the window got closed.
 
 ## Updating
 
-When there's a new version, **right-click `update.ps1` and choose Run with
-PowerShell.** That's the whole process.
+When there's a new version, **double-click `Update SubSniper.bat`.** That's the
+whole process.
 
 It checks GitHub, backs up your current copy, downloads the new version, and
 installs it. **Your settings are never touched** - your logins (`.env`), your
@@ -288,10 +286,15 @@ Two things it will stop and tell you about:
   updater again. Replacing files under a live program corrupts things.
 - **You're already up to date.** Nothing happens.
 
-To look without installing anything:
+> **If a window flashes open and closes instantly**, you ran `update.ps1`
+> directly instead of the `.bat`. Windows blocks PowerShell scripts that came
+> out of a downloaded zip, and it does it silently. Use
+> `Update SubSniper.bat` — it clears that block for you.
+
+To look without installing anything, open PowerShell in the folder and run:
 
 ```
-powershell -ExecutionPolicy Bypass -File update.ps1 -Check
+.\"Update SubSniper.bat" -Check
 ```
 
 Or ask the program itself:

@@ -422,3 +422,45 @@ def test_sustained_failures_trigger_a_notification():
     warn = body[body.index("def _maybe_warn_failing"):body.index("def _next_interval")]
     assert "self.notifier.error" in warn, "must actually push a notification"
     assert "3600" in warn, "must rate-limit so it can't spam"
+
+
+# -- Windows launchers ---------------------------------------------------------
+
+@pytest.mark.parametrize("launcher", ["Setup SubSniper.bat", "Update SubSniper.bat"])
+def test_launcher_exists(launcher):
+    assert (ROOT / launcher).exists(), f"{launcher} is what the README tells users to click"
+
+
+@pytest.mark.parametrize("launcher", ["Setup SubSniper.bat", "Update SubSniper.bat"])
+def test_launcher_clears_mark_of_the_web(launcher):
+    """Scripts extracted from a downloaded zip are blocked by Windows.
+
+    Observed in the field: the window opened and closed instantly with no
+    message at all, on a machine where the same script ran fine for the
+    developer. The difference was that his copy came from a git clone (no zone
+    marking) and had a loosened execution policy; the user's came from a zip on
+    a default-Restricted machine.
+    """
+    body = (ROOT / launcher).read_text(encoding="utf-8")
+    assert "Unblock-File" in body, "must clear the Mark of the Web"
+    assert "-ExecutionPolicy Bypass" in body, "must not depend on the machine's policy"
+
+
+@pytest.mark.parametrize("launcher", ["Setup SubSniper.bat", "Update SubSniper.bat"])
+def test_launcher_always_pauses(launcher):
+    """A window that vanishes tells the user nothing.
+
+    The pause has to be in the .bat, not the .ps1 - a script that dies early
+    never reaches its own prompt, which is precisely the failure being fixed.
+    """
+    body = (ROOT / launcher).read_text(encoding="utf-8")
+    assert "pause" in body.lower()
+
+
+def test_scripts_do_not_rely_on_their_own_closing_prompt():
+    for name in ("update.ps1", "setup.ps1"):
+        body = (ROOT / name).read_text(encoding="utf-8")
+        assert 'Read-Host "Press Enter to close"' not in body, (
+            f"{name} should let the .bat handle pausing - its own prompt is "
+            "unreachable when the script dies early"
+        )

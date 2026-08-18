@@ -35,7 +35,6 @@ function Die([string]$m) {
     Write-Host "STOPPED: $m" -ForegroundColor Red
     Write-Host "Nothing was changed." -ForegroundColor Red
     Write-Host ""
-    Read-Host "Press Enter to close"
     exit 1
 }
 
@@ -71,14 +70,12 @@ Write-Host ""
 if ($currentSha -ne "unknown" -and $latestSha.StartsWith($currentSha)) {
     Good "You're already up to date. Nothing to do."
     Write-Host ""
-    Read-Host "Press Enter to close"
     exit 0
 }
 
 if ($Check) {
     Warn "An update is available. Run update.ps1 without -Check to install it."
     Write-Host ""
-    Read-Host "Press Enter to close"
     exit 0
 }
 
@@ -164,4 +161,3 @@ Write-Host "Start it again by double-clicking 'Start SubSniper.bat'."
 Write-Host ""
 Write-Host "If something's wrong, your previous copy is in backups\$stamp" -ForegroundColor Yellow
 Write-Host ""
-Read-Host "Press Enter to close"

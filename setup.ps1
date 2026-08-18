@@ -1,7 +1,11 @@
 # SubSniper setup for Windows
 #
-# Right-click this file and choose "Run with PowerShell", or from a terminal:
-#   powershell -ExecutionPolicy Bypass -File setup.ps1
+# Do not run this directly - double-click "Setup SubSniper.bat" instead.
+#
+# Windows blocks PowerShell scripts extracted from a downloaded zip (Mark of
+# the Web), and Home editions default to a Restricted execution policy. Either
+# makes this file close instantly with no message. The .bat clears the flag and
+# runs this explicitly.
 #
 # It installs everything SubSniper needs and creates your two settings files.
 # Safe to run more than once - it won't overwrite settings you've already saved.
@@ -17,7 +21,6 @@ function Die([string]$msg) {
     Write-Host ""
     Write-Host "STOPPED: $msg" -ForegroundColor Red
     Write-Host ""
-    Read-Host "Press Enter to close"
     exit 1
 }
 
@@ -138,4 +141,3 @@ Write-Host "When you've saved it, come back and run this to check it works:" -Fo
 Write-Host ""
 Write-Host '   .venv\Scripts\python.exe -m subsniper test-notify' -ForegroundColor White
 Write-Host ""
-Read-Host "Press Enter to close"
