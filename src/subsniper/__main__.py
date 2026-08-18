@@ -283,13 +283,33 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
             mins = (b - a).total_seconds() / 60.0
             if mins > 10:
                 gaps.append((a, b, mins))
+        span_h = (alives[-1] - alives[0]).total_seconds() / 3600.0
+        window_h = (events[-1]["_ts"] - events[0]["_ts"]).total_seconds() / 3600.0
         if not gaps:
-            print("  None. It polled continuously through the logged window.")
+            print(f"  None found across the {span_h:.1f}h that has proof-of-life data.")
+            if window_h - span_h > 1.0:
+                print(f"  CAUTION: the log covers {window_h:.1f}h but only {span_h:.1f}h of it")
+                print("  has proof-of-life marks (older versions didn't record them), so")
+                print("  this says nothing about the rest. Not a clean bill of health.")
         else:
             print(f"  {len(gaps)} gap(s) over 10 minutes:")
             for a, b, mins in gaps[-12:]:
                 flag = "  <-- MORNING RUSH" if _overlaps_rush(a, b) else ""
                 print(f"    {a:%m-%d %H:%M} -> {b:%m-%d %H:%M}  ({mins:.0f} min){flag}")
+    print()
+
+    errors = [e for e in events if e.get("event") in ("poll_error", "auth_error", "reauth_failed")]
+    print("-- errors -----------------------------------------------------")
+    if not errors:
+        print("  None.")
+    else:
+        ok = len([e for e in events if e.get("event") == "alive"])
+        print(f"  {len(errors)} error(s). Polls that succeeded: ~{ok} proof-of-life marks.")
+        by_msg: Counter = Counter(str(e.get("error", "?"))[:160] for e in errors)
+        print("  most common:")
+        for msg, n in by_msg.most_common(5):
+            print(f"    {n:>4}x  {msg}")
+        print(f"  most recent: {errors[-1]['_ts']:%m-%d %H:%M:%S}  {str(errors[-1].get('error',''))[:200]}")
     print()
 
     print("-- why jobs were skipped --------------------------------------")

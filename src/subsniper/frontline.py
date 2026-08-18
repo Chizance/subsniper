@@ -2,10 +2,15 @@
 
 Two-speed design, chosen after measuring the real site:
 
-  DETECTION (hot path)  - an authenticated same-origin fetch of
-    /Substitute/Home issued from inside the logged-in browser context.
-    Measured at ~118ms / 40KB against the live site. No rendering, no
+  DETECTION (hot path)  - an authenticated GET of /Substitute/Home issued
+    through the browser context's request API, which shares the logged-in
+    cookie jar but runs outside page JavaScript. ~40KB, no rendering, no
     navigation. This is what runs every few seconds.
+
+    It deliberately does NOT call fetch() inside the page. Frontline loads
+    Dynatrace RUM, which patches window.fetch; in the field that wrapper
+    threw "TypeError: Failed to fetch" on nearly every poll. Any script the
+    site ships can patch fetch, and we don't control what they ship.
 
   ACCEPT (correctness path) - navigates the real page and clicks the real
     `.acceptButton`. Slower, but it inherits CSRF tokens and whatever click
@@ -20,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -208,26 +214,7 @@ class FrontlineClient:
         origin = self._origin or "https://absencesub.frontlineeducation.com"
         url = _join(origin, JOBS_PATH)
 
-        try:
-            result: dict[str, Any] = await self._page.evaluate(
-                """async (url) => {
-                    const t0 = performance.now();
-                    const r = await fetch(url, {
-                        credentials: 'same-origin',
-                        redirect: 'follow',
-                        cache: 'no-store',
-                    });
-                    const html = await r.text();
-                    return { status: r.status, html, ms: Math.round(performance.now() - t0) };
-                }""",
-                url,
-            )
-        except Exception as exc:  # page crashed, navigated, or was closed
-            raise TransientError(f"poll fetch failed: {exc}") from exc
-
-        status = int(result.get("status", 0))
-        html = str(result.get("html", ""))
-        latency = int(result.get("ms", 0))
+        status, html, latency = await self._fetch(url)
 
         if status in (401, 403) or looks_logged_out(html):
             self._auth_failures += 1
@@ -239,6 +226,55 @@ class FrontlineClient:
 
         self._auth_failures = 0
         return PollResult(jobs=parse_jobs(html), latency_ms=latency, status=status)
+
+    async def _fetch(self, url: str) -> tuple[int, str, int]:
+        """Retrieve the jobs page. Returns (status, html, latency_ms).
+
+        Uses the browser context's own request API rather than calling fetch()
+        inside the page. Both share the logged-in cookie jar, but this one runs
+        outside page JavaScript.
+
+        That distinction is load-bearing. Frontline ships Dynatrace RUM
+        (ruxitagentjs), which monkey-patches window.fetch to instrument every
+        request. Our in-page fetch went through that wrapper, and it threw
+        "TypeError: Failed to fetch" on essentially every poll - the site's own
+        telemetry breaking our request. Going around page JS sidesteps the whole
+        class of problem: any script the site loads can patch fetch, and we
+        can't control what they ship.
+
+        The in-page path is kept as a fallback in case a district's setup makes
+        the context request fail instead.
+        """
+        assert self._ctx is not None and self._page is not None
+
+        started = time.perf_counter()
+        try:
+            resp = await self._ctx.request.get(url, timeout=25_000)
+            html = await resp.text()
+            return resp.status, html, int((time.perf_counter() - started) * 1000)
+        except Exception as api_exc:  # noqa: BLE001 - fall through to the backup
+            log.debug("context request failed (%s), trying in-page fetch", api_exc)
+
+        try:
+            started = time.perf_counter()
+            result: dict[str, Any] = await self._page.evaluate(
+                """async (url) => {
+                    const r = await fetch(url, {
+                        credentials: 'same-origin',
+                        redirect: 'follow',
+                        cache: 'no-store',
+                    });
+                    return { status: r.status, html: await r.text() };
+                }""",
+                url,
+            )
+            return (
+                int(result.get("status", 0)),
+                str(result.get("html", "")),
+                int((time.perf_counter() - started) * 1000),
+            )
+        except Exception as exc:
+            raise TransientError(f"both fetch paths failed: {exc}") from exc
 
     # -- accept ----------------------------------------------------------------
     async def accept(self, job: Job) -> tuple[bool, str]:

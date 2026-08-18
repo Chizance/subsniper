@@ -45,6 +45,8 @@ class Poller:
         self._stopping = False
         self._polls = 0
         self._last_alive: datetime | None = None
+        self._consecutive_errors = 0
+        self._last_error_notice: datetime | None = None
 
     async def run(self) -> None:
         # Two copies polling at once double the request rate against Frontline and
@@ -128,11 +130,20 @@ class Poller:
             return
         except TransientError as exc:
             self._bump_backoff()
-            log.warning("poll failed (%s), backing off %.0fs", exc, self._backoff)
-            self.store.audit("poll_error", error=str(exc), backoff=self._backoff)
+            self._consecutive_errors += 1
+            log.warning(
+                "poll failed (%s), backing off %.0fs [%d in a row]",
+                exc, self._backoff, self._consecutive_errors,
+            )
+            self.store.audit(
+                "poll_error", error=str(exc), backoff=self._backoff,
+                consecutive=self._consecutive_errors,
+            )
+            self._maybe_warn_failing(str(exc))
             return
 
         self._backoff = 0.0
+        self._consecutive_errors = 0
         self._polls += 1
         # Periodic proof-of-life in the audit log. Without this there's no way to
         # tell "no jobs were posted" apart from "we weren't running" after the
@@ -250,7 +261,38 @@ class Poller:
     def _bump_backoff(self) -> None:
         base = float(self.cfg.get("polling.error_backoff_seconds", 30))
         cap = float(self.cfg.get("polling.error_backoff_max_seconds", 900))
+        # Never back off so far that we sleep through the window this exists for.
+        # Observed in the field: persistent errors drove the backoff to its 900s
+        # ceiling, so it polled 4 times an hour straight through the morning
+        # rush - indistinguishable from being switched off.
+        now = datetime.now()
+        interval, _name = self.cfg.interval_for(now.weekday(), now.time())
+        if interval <= 20:
+            cap = min(cap, 60.0)
         self._backoff = min(cap, base if self._backoff == 0 else self._backoff * 2)
+
+    def _maybe_warn_failing(self, detail: str) -> None:
+        """Push a warning when polling is persistently broken.
+
+        Without this the daily heartbeat still reports "SubSniper is running",
+        which is true and useless: it ran for a full day failing ~9 of every 10
+        polls and nobody knew until the log was read by hand. Silence has to
+        mean "no jobs", not "quietly broken".
+        """
+        if self._consecutive_errors < 10:
+            return
+        now = datetime.now()
+        if (
+            self._last_error_notice is not None
+            and (now - self._last_error_notice).total_seconds() < 3600
+        ):
+            return
+        self._last_error_notice = now
+        self.notifier.error(
+            f"SubSniper can't reach Frontline - {self._consecutive_errors} failed "
+            f"checks in a row. It is NOT watching for jobs right now.\n\n"
+            f"{detail[:300]}"
+        )
 
     def _next_interval(self) -> float:
         if self._backoff > 0:

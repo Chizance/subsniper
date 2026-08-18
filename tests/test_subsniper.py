@@ -377,3 +377,48 @@ def test_updater_refuses_while_running():
     """Replacing files under a live process corrupts state mid-write."""
     body = UPDATER.read_text(encoding="utf-8")
     assert "running.lock" in body, "updater must check the liveness lock"
+
+
+# -- polling must survive the site's own instrumentation -----------------------
+
+def test_poll_does_not_use_in_page_fetch_as_primary():
+    """The hot path must not depend on the page's window.fetch.
+
+    Frontline ships Dynatrace RUM (ruxitagentjs), which patches window.fetch.
+    In the field that wrapper threw "TypeError: Failed to fetch" on roughly 9 of
+    every 10 polls while login and the heartbeat both looked fine. The context
+    request API shares the same cookie jar but runs outside page JavaScript, so
+    nothing the site loads can break it.
+    """
+    body = (ROOT / "src" / "subsniper" / "frontline.py").read_text(encoding="utf-8")
+    fetch_impl = body[body.index("async def _fetch"):]
+    ctx_pos = fetch_impl.index("self._ctx.request.get")
+    page_pos = fetch_impl.index("page.evaluate")
+    assert ctx_pos < page_pos, (
+        "the context request must be tried BEFORE the in-page fetch fallback"
+    )
+
+
+def test_backoff_cannot_sleep_through_the_morning_rush():
+    """A 900s backoff during a 5s window is the same as being switched off.
+
+    This happened: persistent errors drove the backoff to its ceiling and it
+    polled four times an hour straight through the rush.
+    """
+    body = (ROOT / "src" / "subsniper" / "poller.py").read_text(encoding="utf-8")
+    bump = body[body.index("def _bump_backoff"):body.index("def _maybe_heartbeat")]
+    assert "interval_for" in bump, "backoff must consider the current poll window"
+    assert "60.0" in bump, "backoff must be capped during fast windows"
+
+
+def test_sustained_failures_trigger_a_notification():
+    """Silence must mean "no jobs", not "quietly broken".
+
+    The heartbeat reported "SubSniper is running" for a full day while nearly
+    every poll failed. Running and working are different claims.
+    """
+    body = (ROOT / "src" / "subsniper" / "poller.py").read_text(encoding="utf-8")
+    assert "_maybe_warn_failing" in body
+    warn = body[body.index("def _maybe_warn_failing"):body.index("def _next_interval")]
+    assert "self.notifier.error" in warn, "must actually push a notification"
+    assert "3600" in warn, "must rate-limit so it can't spam"
