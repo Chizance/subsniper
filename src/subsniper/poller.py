@@ -43,26 +43,64 @@ class Poller:
         self._backoff = 0.0
         self._last_heartbeat: date | None = None
         self._stopping = False
+        self._polls = 0
+        self._last_alive: datetime | None = None
 
     async def run(self) -> None:
+        # Two copies polling at once double the request rate against Frontline and
+        # race each other on the state files.
+        if self.store.another_instance_running():
+            log.error(
+                "another SubSniper appears to be running already (see %s). "
+                "Refusing to start a second copy. If you're sure nothing else is "
+                "running, delete that file and try again.",
+                self.store.lock_path,
+            )
+            self.store.audit("refused_second_instance")
+            return
+
         await self.client.start()
         log.info(
             "SubSniper started | dry_run=%s | max/day=%s",
             self.cfg.dry_run,
             self.cfg.get("autoaccept.max_accepts_per_day"),
         )
-        self.store.audit("service_start", dry_run=self.cfg.dry_run)
+        starts_today = self.store.record_service_start()
+        self.store.audit("service_start", dry_run=self.cfg.dry_run, starts_today=starts_today)
 
-        # On the very first poll, treat everything already posted as "seen" so a
-        # cold start doesn't fire notifications (or accepts) for a backlog of
-        # stale jobs that have been sitting there for hours.
+        # Priming exists so a genuine cold start doesn't fire notifications for a
+        # backlog of stale jobs posted hours ago. But it must NOT run on a quick
+        # restart: state is current, so anything unseen is genuinely new, and
+        # swallowing it silently is exactly how jobs go missing.
+        stale_after = float(self.cfg.get("polling.cold_start_after_seconds", 21600))
+        age = self.store.seen_age_seconds()
+        cold_start = age is None or age > stale_after
+
         try:
             first = await self.client.poll()
-            self.store.mark_seen(first.jobs)
-            log.info("primed with %d already-posted job(s)", len(first.jobs))
-            self.store.audit("primed", count=len(first.jobs))
+            if cold_start:
+                self.store.mark_seen(first.jobs)
+                log.info("cold start: priming with %d already-posted job(s)", len(first.jobs))
+                self.store.audit("primed", count=len(first.jobs), state_age_seconds=age)
+            else:
+                log.info(
+                    "warm restart (state %.0fs old): NOT priming, %d listed job(s) "
+                    "will be evaluated normally",
+                    age, len(first.jobs),
+                )
+                self.store.audit("warm_restart", listed=len(first.jobs), state_age_seconds=age)
         except (AuthError, TransientError) as exc:
             log.warning("priming poll failed: %s", exc)
+
+        # Restarting repeatedly is invisible from the phone but breaks everything.
+        # Surface it rather than letting it look healthy.
+        if starts_today >= 5:
+            log.warning("service has started %d times today - something is restarting it", starts_today)
+            self.notifier.error(
+                f"SubSniper has restarted {starts_today} times today. It may be "
+                "crash-looping or being started twice, which can cause missed jobs. "
+                "Check logs/subsniper.log."
+            )
 
         try:
             while not self._stopping:
@@ -75,12 +113,14 @@ class Poller:
 
     async def shutdown(self) -> None:
         self.store.audit("service_stop")
+        self.store.release_lock()
         self.notifier.close()
         await self.client.close()
 
     # -- one cycle -------------------------------------------------------------
     async def _tick(self) -> None:
         self._maybe_heartbeat()
+        self.store.touch_lock()
         try:
             result = await self.client.poll()
         except AuthError as exc:
@@ -93,6 +133,17 @@ class Poller:
             return
 
         self._backoff = 0.0
+        self._polls += 1
+        # Periodic proof-of-life in the audit log. Without this there's no way to
+        # tell "no jobs were posted" apart from "we weren't running" after the
+        # fact - which is the exact ambiguity that made this morning hard to read.
+        now_ts = datetime.now()
+        if self._last_alive is None or (now_ts - self._last_alive).total_seconds() >= 300:
+            self._last_alive = now_ts
+            self.store.audit(
+                "alive", polls=self._polls, listed=len(result.jobs), latency_ms=result.latency_ms
+            )
+
         new_jobs = [j for j in result.jobs if self.store.is_new(j)]
         if result.jobs:
             log.debug("%d job(s) listed, %d new (%dms)", len(result.jobs), len(new_jobs), result.latency_ms)
@@ -217,6 +268,12 @@ class Poller:
         today = date.today()
         if self._last_heartbeat == today:
             return
+        # Persisted, not just in-memory. Previously a restart reset this and fired
+        # a fresh heartbeat, so a crash-looping service still looked healthy from
+        # the phone - duplicate heartbeats were the only symptom.
+        if self.store.heartbeat_sent_today():
+            self._last_heartbeat = today
+            return
         target = str(self.cfg.get("notifications.daily_heartbeat_time", "04:45"))
         try:
             hh, mm = (int(p) for p in target.split(":"))
@@ -225,10 +282,15 @@ class Poller:
         now = datetime.now()
         if (now.hour, now.minute) >= (hh, mm):
             self._last_heartbeat = today
+            self.store.mark_heartbeat_sent()
             mode = "DRY RUN" if self.cfg.dry_run else "ARMED"
+            from . import __version__
+
             self.notifier.heartbeat(
                 f"Mode: {mode}\nAccepted today: {self.store.accepts_today()}"
-                f"/{self.cfg.get('autoaccept.max_accepts_per_day')}"
+                f"/{self.cfg.get('autoaccept.max_accepts_per_day')}\n"
+                f"Restarts today: {self.store.starts_today()}\n"
+                f"Version: {__version__}"
             )
 
     def stop(self) -> None:

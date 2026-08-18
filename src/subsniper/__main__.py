@@ -16,6 +16,7 @@ import json
 import logging
 import signal
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from .config import ConfigError, load_config
@@ -166,6 +167,165 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_version(args: argparse.Namespace) -> int:
+    """Show what's installed and whether GitHub has something newer."""
+    from . import __version__
+
+    # Deliberately does NOT load config. "What version am I on?" must work even
+    # when the install is broken - that's often exactly when you're asking.
+    root = Path(args.config).expanduser().resolve().parent
+    if not root.exists():
+        root = Path.cwd()
+    print(f"SubSniper {__version__}")
+
+    stamp = root / "VERSION.txt"
+    installed = None
+    if stamp.exists():
+        line = stamp.read_text(encoding="utf-8").strip().splitlines()[0]
+        print(f"installed: {line}")
+        installed = line.split()[0]
+    else:
+        print("installed: unknown (no VERSION.txt - installed before the updater existed)")
+
+    if args.no_check:
+        return 0
+
+    try:
+        import httpx
+
+        r = httpx.get(
+            "https://api.github.com/repos/Chizance/subsniper/commits/main",
+            headers={"User-Agent": "SubSniper"},
+            timeout=15.0,
+        )
+        if r.status_code != 200:
+            print(f"could not check for updates (HTTP {r.status_code})")
+            return 0
+        data = r.json()
+        latest = data.get("sha", "")
+        msg = str(data.get("commit", {}).get("message", "")).splitlines()[0]
+        print(f"latest:    {latest[:7]}  {msg}")
+        if installed and latest.startswith(installed):
+            print("\nUp to date.")
+        else:
+            print("\nAn update is available. Run update.ps1 to install it.")
+    except Exception as exc:  # noqa: BLE001 - never let a version check break anything
+        print(f"could not check for updates: {exc}")
+    return 0
+
+
+def cmd_diagnose(args: argparse.Namespace) -> int:
+    """Read the audit log and report what actually happened.
+
+    Answers the question a phone can't: was SubSniper even running when the jobs
+    were posted, and if it was, what did it decide about each one?
+    """
+    from collections import Counter
+
+    cfg = load_config(args.config, args.env, require_credentials=False)
+    audit = cfg.root / str(cfg.get("logging.audit_file", "logs/audit.jsonl"))
+    if not audit.exists():
+        print(f"No audit log at {audit}")
+        print("SubSniper has never completed a startup in this folder.")
+        return 1
+
+    cutoff = datetime.now() - timedelta(days=int(args.days))
+    events: list[dict] = []
+    with audit.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            try:
+                rec = json.loads(line)
+                ts = datetime.fromisoformat(rec["ts"])
+            except (json.JSONDecodeError, KeyError, ValueError):
+                continue
+            if ts >= cutoff:
+                rec["_ts"] = ts
+                events.append(rec)
+
+    if not events:
+        print(f"No audit entries in the last {args.days} day(s).")
+        return 1
+
+    counts = Counter(e.get("event") for e in events)
+    starts = [e for e in events if e.get("event") == "service_start"]
+    alives = sorted(
+        (e["_ts"] for e in events if e.get("event") == "alive")
+    )
+
+    print(f"=== SubSniper diagnosis: last {args.days} day(s) ===")
+    print(f"log: {audit}")
+    print(f"window: {events[0]['_ts']:%Y-%m-%d %H:%M} .. {events[-1]['_ts']:%Y-%m-%d %H:%M}\n")
+
+    print("-- activity ---------------------------------------------------")
+    for name in ("service_start", "warm_restart", "primed", "alive", "job_matched",
+                 "job_skipped", "accept_attempt", "accept_blocked", "poll_error",
+                 "auth_error", "reauth_failed", "refused_second_instance"):
+        if counts.get(name):
+            print(f"  {name:<24} {counts[name]}")
+    print()
+
+    print("-- restarts ---------------------------------------------------")
+    if len(starts) <= 1:
+        print("  1 start. Good - it stayed up.")
+    else:
+        print(f"  {len(starts)} starts. Repeated restarts cause missed jobs.")
+        for s in starts[-8:]:
+            print(f"    {s['_ts']:%m-%d %H:%M:%S}  (start #{s.get('starts_today','?')} that day)")
+    print()
+
+    print("-- coverage gaps (when it was NOT watching) -------------------")
+    if not alives:
+        print("  No proof-of-life entries. Either this is an older version, or")
+        print("  it never completed a successful poll.")
+    else:
+        gaps = []
+        for a, b in zip(alives, alives[1:]):
+            mins = (b - a).total_seconds() / 60.0
+            if mins > 10:
+                gaps.append((a, b, mins))
+        if not gaps:
+            print("  None. It polled continuously through the logged window.")
+        else:
+            print(f"  {len(gaps)} gap(s) over 10 minutes:")
+            for a, b, mins in gaps[-12:]:
+                flag = "  <-- MORNING RUSH" if _overlaps_rush(a, b) else ""
+                print(f"    {a:%m-%d %H:%M} -> {b:%m-%d %H:%M}  ({mins:.0f} min){flag}")
+    print()
+
+    print("-- why jobs were skipped --------------------------------------")
+    reasons: Counter = Counter()
+    for e in events:
+        if e.get("event") == "job_skipped":
+            for r in e.get("reasons", []):
+                reasons[str(r).split(":")[0]] += 1
+    if not reasons:
+        print("  No jobs were filtered out.")
+    else:
+        for reason, n in reasons.most_common():
+            print(f"  {n:>4}  {reason}")
+    print()
+
+    matched = [e for e in events if e.get("event") == "job_matched"]
+    print(f"-- matches ({len(matched)}) ---------------------------------------------")
+    for e in matched[-10:]:
+        job = e.get("job", {})
+        print(f"  {e['_ts']:%m-%d %H:%M}  {job.get('title','?')} @ {job.get('school','?')}")
+    if not matched:
+        print("  None matched your filters in this window.")
+
+    return 0
+
+
+def _overlaps_rush(a: datetime, b: datetime, start_hour: int = 5, end_hour: int = 9) -> bool:
+    """Did this gap cover any of the morning posting window?"""
+    cur = a
+    while cur < b:
+        if start_hour <= cur.hour < end_hour:
+            return True
+        cur += timedelta(minutes=15)
+    return start_hour <= b.hour < end_hour
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="subsniper", description="Frontline sub-job sniper")
     parser.add_argument("--config", default="config.yaml")
@@ -180,6 +340,14 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("check", help="validate config and auth").set_defaults(func=cmd_check)
     sub.add_parser("test-notify", help="send a test push").set_defaults(func=cmd_test_notify)
     sub.add_parser("status", help="show accept ledger").set_defaults(func=cmd_status)
+
+    p_ver = sub.add_parser("version", help="show version and check for updates")
+    p_ver.add_argument("--no-check", action="store_true", help="don't contact GitHub")
+    p_ver.set_defaults(func=cmd_version)
+
+    p_diag = sub.add_parser("diagnose", help="read the audit log and report what happened")
+    p_diag.add_argument("--days", type=int, default=2, help="how far back to look (default 2)")
+    p_diag.set_defaults(func=cmd_diagnose)
 
     p_replay = sub.add_parser("replay", help="run a saved page/json through the filters")
     p_replay.add_argument("file")

@@ -272,6 +272,57 @@ that means the computer restarted or the window got closed.
 
 ---
 
+## Updating
+
+When there's a new version, **right-click `update.ps1` and choose Run with
+PowerShell.** That's the whole process.
+
+It checks GitHub, backs up your current copy, downloads the new version, and
+installs it. **Your settings are never touched** - your logins (`.env`), your
+job preferences (`config.yaml`), and its memory of jobs it has already seen all
+stay exactly as they are. Only the program itself is replaced.
+
+Two things it will stop and tell you about:
+
+- **SubSniper is still running.** Close the SubSniper window first, then run the
+  updater again. Replacing files under a live program corrupts things.
+- **You're already up to date.** Nothing happens.
+
+To look without installing anything:
+
+```
+powershell -ExecutionPolicy Bypass -File update.ps1 -Check
+```
+
+Or ask the program itself:
+
+```
+.venv\Scripts\python.exe -m subsniper version
+```
+
+If an update ever makes things worse, your previous copy is sitting in the
+`backups` folder, stamped with the date and time.
+
+---
+
+## First thing to run when it "didn't work"
+
+```
+.venv\Scripts\python.exe -m subsniper diagnose
+```
+
+This reads SubSniper's own log and tells you what actually happened — most
+importantly **whether it was even running** when the jobs were posted. It
+reports how many times it restarted, any stretch of time it wasn't watching
+(flagging gaps that cover the morning rush), and for every job it saw, why it
+was skipped.
+
+Almost every "it didn't work" turns out to be a coverage gap — the computer
+slept, or the window got closed — rather than anything wrong with the filters.
+Run this before changing any settings.
+
+---
+
 ## When something goes wrong
 
 **Phone never buzzes.** Run the `test-notify` command from Step 6. If it fails,

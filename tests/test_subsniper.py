@@ -24,6 +24,11 @@ from subsniper.parser import looks_logged_out, parse_jobs  # noqa: E402
 from subsniper.state import Store  # noqa: E402
 
 FIXTURE = Path(__file__).parent / "fixtures" / "available_jobs.html"
+
+# Pin the clock. The fixture uses fixed dates, so without this the suite starts
+# failing the moment those dates fall into the past and the lead-time filter
+# (correctly) rejects jobs that have already started.
+NOW = datetime(2026, 8, 16, 12, 0)
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -105,7 +110,7 @@ def test_detects_logged_out_page():
 )
 def test_role_filter(jobs, cfg, school, should_match):
     job = _by_school(jobs, school)
-    assert filters.evaluate(job, cfg).matched is should_match
+    assert filters.evaluate(job, cfg, now=NOW).matched is should_match
 
 
 def test_role_matching_ignores_notes_and_employee_name(jobs, cfg):
@@ -119,12 +124,12 @@ def test_role_matching_ignores_notes_and_employee_name(jobs, cfg):
     assert "Principal" in job.notes or "Principal" in job.searchable_text
     assert "Coach" in job.employee
     assert job.role_text == "Teacher, Grade 6 Science"
-    assert filters.evaluate(job, cfg).matched
+    assert filters.evaluate(job, cfg, now=NOW).matched
 
 
 def test_untitled_job_fails_closed(jobs, cfg):
     job = _by_school(jobs, "Maple")
-    result = filters.evaluate(job, cfg)
+    result = filters.evaluate(job, cfg, now=NOW)
     assert not result.matched
     assert "failing closed" in result.reason_text
 
@@ -141,14 +146,14 @@ def test_untitled_job_fails_closed(jobs, cfg):
     ],
 )
 def test_time_filter_reasons(jobs, cfg, school, fragment):
-    result = filters.evaluate(_by_school(jobs, school), cfg)
+    result = filters.evaluate(_by_school(jobs, school), cfg, now=NOW)
     assert not result.matched
     assert fragment in result.reason_text
 
 
 def test_unparseable_start_time_is_rejected(cfg):
     job = Job.from_payload({"id": "x", "positionName": "Teacher, Grade 4"})
-    result = filters.evaluate(job, cfg)
+    result = filters.evaluate(job, cfg, now=NOW)
     assert not result.matched
     assert "could not parse a start time" in result.reason_text
 
@@ -269,3 +274,106 @@ def test_already_accepted_blocks_a_repeat(tmp_path, jobs):
     assert not store.already_accepted(job)
     store.record_accept(job, ok=True, detail="ok", dry_run=False)
     assert Store(tmp_path).already_accepted(job)
+
+
+# -- restart handling (the bug that silently ate Nick's jobs) -------------------
+
+def test_fresh_state_reads_as_cold_start(tmp_path):
+    """No state file at all -> prime, so a first run doesn't spam a backlog."""
+    store = Store(tmp_path)
+    assert store.seen_age_seconds() is None
+
+
+def test_recent_state_reads_as_warm_restart(tmp_path, jobs):
+    """State written seconds ago -> do NOT prime.
+
+    This is the regression that mattered: priming on every start meant every
+    restart silently absorbed all jobs posted since the last one, so they never
+    produced a notification. Anything under the cold-start threshold must be
+    treated as warm.
+    """
+    store = Store(tmp_path)
+    store.mark_seen(jobs)
+    age = store.seen_age_seconds()
+    assert age is not None and age < 60
+    assert age < 21600, "recent state must not be classified as a cold start"
+
+
+def test_heartbeat_survives_a_restart(tmp_path):
+    """Heartbeat state must persist, or a crash loop still looks healthy.
+
+    Previously this lived only in memory, so each restart fired a fresh
+    heartbeat - the duplicate notifications were the only outward sign that
+    anything was wrong.
+    """
+    store = Store(tmp_path)
+    assert not store.heartbeat_sent_today()
+    store.mark_heartbeat_sent()
+    assert Store(tmp_path).heartbeat_sent_today()
+
+
+def test_restarts_are_counted(tmp_path):
+    Store(tmp_path).record_service_start()
+    Store(tmp_path).record_service_start()
+    assert Store(tmp_path).record_service_start() == 3
+    assert Store(tmp_path).starts_today() == 3
+
+
+def test_second_instance_is_detected(tmp_path):
+    """Two copies double the request rate and race on the same state files."""
+    store = Store(tmp_path)
+    assert not store.another_instance_running()
+    store.touch_lock()
+    assert Store(tmp_path).another_instance_running()
+    store.release_lock()
+    assert not Store(tmp_path).another_instance_running()
+
+
+def test_stale_lock_does_not_block_startup(tmp_path):
+    """A lock left behind by a crash must not wedge it shut forever."""
+    store = Store(tmp_path)
+    store.touch_lock()
+    assert not store.another_instance_running(stale_seconds=0.0)
+
+
+# -- updater safety ------------------------------------------------------------
+
+UPDATER = ROOT / "update.ps1"
+
+
+def test_updater_exists():
+    assert UPDATER.exists(), "update.ps1 is referenced by the README and must ship"
+
+
+@pytest.mark.parametrize(
+    "must_preserve",
+    [".env", "config.yaml", "state", "logs", ".venv", "STOP"],
+)
+def test_updater_never_overwrites_user_data(must_preserve):
+    """The updater replaces program files in place. Anything the user owns must
+    be on its preserve list.
+
+    Dropping `.env` from that list would overwrite real Frontline credentials
+    with the blank template on the next update - the tool would silently stop
+    working and the cause would be invisible. `config.yaml` would silently reset
+    every filter to the defaults. `state` would make it re-notify or re-accept
+    jobs it had already handled.
+    """
+    body = UPDATER.read_text(encoding="utf-8")
+    start = body.index("$Preserve")
+    block = body[start:body.index(")", start)]
+    assert f'"{must_preserve}"' in block, (
+        f"{must_preserve!r} is missing from the updater's $Preserve list - "
+        "an update would destroy it"
+    )
+
+
+def test_updater_backs_up_before_replacing():
+    body = UPDATER.read_text(encoding="utf-8")
+    assert "backupDir" in body and "Copy-Item" in body, "updater must back up first"
+
+
+def test_updater_refuses_while_running():
+    """Replacing files under a live process corrupts state mid-write."""
+    body = UPDATER.read_text(encoding="utf-8")
+    assert "running.lock" in body, "updater must check the liveness lock"

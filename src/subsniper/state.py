@@ -45,8 +45,89 @@ class Store:
         self.audit_path = root / "logs" / "audit.jsonl"
         self.audit_path.parent.mkdir(parents=True, exist_ok=True)
 
+        self.meta_path = self.state_dir / "meta.json"
+        self.lock_path = self.state_dir / "running.lock"
+
         self._seen: dict[str, str] = self._load(self.seen_path, {})
         self._accepts: list[dict[str, Any]] = self._load(self.accepts_path, [])
+        self._meta: dict[str, Any] = self._load(self.meta_path, {})
+
+    # -- meta (heartbeat, restart tracking) ------------------------------------
+    def _save_meta(self) -> None:
+        _atomic_write(self.meta_path, json.dumps(self._meta, indent=2))
+
+    def seen_age_seconds(self) -> float | None:
+        """How long since the seen-set was last written. None if never.
+
+        This is what distinguishes a genuine cold start (nothing known, prime to
+        avoid spamming a backlog) from a restart moments after the last poll
+        (state is current, so anything unseen is genuinely new and must NOT be
+        silently swallowed).
+        """
+        if not self.seen_path.exists():
+            return None
+        try:
+            return max(0.0, datetime.now().timestamp() - self.seen_path.stat().st_mtime)
+        except OSError:
+            return None
+
+    def heartbeat_sent_today(self) -> bool:
+        return self._meta.get("last_heartbeat_date") == date.today().isoformat()
+
+    def mark_heartbeat_sent(self) -> None:
+        self._meta["last_heartbeat_date"] = date.today().isoformat()
+        self._save_meta()
+
+    def record_service_start(self) -> int:
+        """Log this start and return how many times we've started today.
+
+        A high count means the process is crash-looping, which is invisible from
+        the phone but devastating: each restart used to swallow every job posted
+        since the last one.
+        """
+        today = date.today().isoformat()
+        starts = self._meta.get("starts", {})
+        if not isinstance(starts, dict):
+            starts = {}
+        starts[today] = int(starts.get(today, 0)) + 1
+        # Keep only the last 14 days
+        for key in sorted(starts)[:-14]:
+            starts.pop(key, None)
+        self._meta["starts"] = starts
+        self._meta["last_start"] = datetime.now().isoformat(timespec="seconds")
+        self._save_meta()
+        return starts[today]
+
+    def starts_today(self) -> int:
+        starts = self._meta.get("starts", {})
+        return int(starts.get(date.today().isoformat(), 0)) if isinstance(starts, dict) else 0
+
+    # -- single-instance lock --------------------------------------------------
+    def another_instance_running(self, stale_seconds: float = 90.0) -> bool:
+        """True if a second copy is already polling.
+
+        Two instances race on the same state files and double-poll Frontline,
+        which doubles the request rate and the odds of being flagged.
+        """
+        if not self.lock_path.exists():
+            return False
+        try:
+            age = datetime.now().timestamp() - self.lock_path.stat().st_mtime
+        except OSError:
+            return False
+        return age < stale_seconds
+
+    def touch_lock(self) -> None:
+        """Refresh the liveness lock. Called every poll cycle."""
+        try:
+            self.lock_path.write_text(
+                datetime.now().isoformat(timespec="seconds"), encoding="utf-8"
+            )
+        except OSError:
+            pass
+
+    def release_lock(self) -> None:
+        self.lock_path.unlink(missing_ok=True)
 
     @staticmethod
     def _load(path: Path, default: Any) -> Any:
