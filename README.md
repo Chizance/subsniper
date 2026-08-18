@@ -300,8 +300,27 @@ Or ask the program itself:
 .venv\Scripts\python.exe -m subsniper version
 ```
 
-If an update ever makes things worse, your previous copy is sitting in the
-`backups` folder, stamped with the date and time.
+After it finishes, **start SubSniper again** — double-click
+`Start SubSniper.bat`. The updater doesn't restart it for you.
+
+### If an update makes things worse
+
+Every update saves a complete copy of what you had first, so going back is
+straightforward:
+
+1. **Close SubSniper** if it's running.
+2. Open the **`backups`** folder inside your SubSniper folder. Inside are folders
+   named by date and time, like `2026-08-18_071500`. Open the newest one.
+3. Select everything inside it (**Ctrl+A**), copy (**Ctrl+C**).
+4. Go back to your SubSniper folder and paste (**Ctrl+V**). Say **yes** to
+   replacing files.
+5. Double-click `Start SubSniper.bat`.
+
+You're now exactly where you were before the update, settings and all. Nothing
+is lost — tell whoever set this up for you what went wrong, and they can look at
+it without any time pressure.
+
+Old backup folders are safe to delete once things have been working for a while.
 
 ---
 
