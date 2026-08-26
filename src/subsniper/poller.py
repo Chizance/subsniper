@@ -25,7 +25,7 @@ from pathlib import Path
 
 from . import filters
 from .config import Config
-from .frontline import AuthError, FrontlineClient, TransientError
+from .frontline import AuthError, BrowserGone, FrontlineClient, TransientError
 from .models import Job
 from .notify import Notifier
 from .state import Store
@@ -125,6 +125,9 @@ class Poller:
         self.store.touch_lock()
         try:
             result = await self.client.poll()
+        except BrowserGone as exc:
+            await self._handle_browser_gone(exc)
+            return
         except AuthError as exc:
             await self._handle_auth_error(exc)
             return
@@ -235,6 +238,32 @@ class Poller:
                     return f"overlaps an already-accepted job ({existing.summary()})"
 
         return None
+
+    async def _handle_browser_gone(self, exc: BrowserGone) -> None:
+        """Rebuild the browser instead of retrying against a dead one.
+
+        Previously this surfaced as an ordinary transient error: the loop kept
+        backing off and re-polling a closed context, failing identically every
+        time, forever. It looked alive from the outside and saw nothing.
+        """
+        self._consecutive_errors += 1
+        log.warning("browser died (%s) - rebuilding it", exc)
+        self.store.audit("browser_gone", error=str(exc)[:300],
+                         consecutive=self._consecutive_errors)
+        try:
+            await self.client.restart()
+            log.info("browser rebuilt successfully")
+            self.store.audit("browser_restarted")
+            self._backoff = 0.0
+            self._consecutive_errors = 0
+            return
+        except Exception as restart_exc:  # noqa: BLE001
+            log.error("could not rebuild the browser: %s", restart_exc)
+            self.store.audit("browser_restart_failed", error=str(restart_exc)[:300])
+            self._bump_backoff()
+            self._maybe_warn_failing(
+                f"The browser keeps dying and could not be restarted: {restart_exc}"
+            )
 
     # -- auth / backoff --------------------------------------------------------
     async def _handle_auth_error(self, exc: AuthError) -> None:

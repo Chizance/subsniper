@@ -266,6 +266,27 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             w(f"  dependency {dep:<12} MISSING ({exc})")
 
     # -- 2. is it running ------------------------------------------------------
+    section("1b. BROWSER PROFILE LOCATION")
+    try:
+        from .frontline import browser_profile_dir
+        cfg_probe = load_config(args.config, args.env, require_credentials=False)
+        prof = browser_profile_dir(cfg_probe)
+        w(f"profile dir       : {prof}")
+        risky = ("onedrive", "dropbox", "google drive", "icloud", "\\documents\\")
+        hit = [r for r in risky if r in str(prof).lower()]
+        if hit:
+            w()
+            w("*** WARNING: this profile is inside a cloud-synced folder ***")
+            w(f"  matched: {hit}")
+            w("  A browser profile is thousands of files with database locks,")
+            w("  written constantly. Sync engines corrupt it and the browser")
+            w("  dies mid-run. Set frontline.browser_profile_dir in config.yaml")
+            w("  to somewhere outside OneDrive, e.g. C:\\SubSniperProfile")
+        else:
+            w("not inside a known cloud-synced folder - good")
+    except Exception as exc:  # noqa: BLE001
+        w(f"could not determine profile dir: {exc}")
+
     section("2. IS IT RUNNING RIGHT NOW")
     try:
         store = Store(root)

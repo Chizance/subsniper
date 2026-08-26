@@ -500,3 +500,49 @@ def test_doctor_reports_every_filter_that_can_reject_a_job(cfg):
                     "allowed_weekdays", "min_lead_time_minutes",
                     "role_include", "denylist"):
         assert setting in doc, f"doctor omits {setting}, which can reject jobs"
+
+
+# -- browser death and recovery ------------------------------------------------
+
+def test_dead_browser_is_classified_separately():
+    """A dead browser is not a retryable transient error.
+
+    Field failure: Chromium closed ~13 minutes in, and every later poll raised
+    the same "Target page, context or browser has been closed". The loop backed
+    off and retried against a closed context forever - alive from outside,
+    blind in fact. It needs its own type so the poller rebuilds instead.
+    """
+    from subsniper.frontline import BrowserGone, TransientError, _looks_like_dead_browser
+
+    assert issubclass(BrowserGone, TransientError)
+    assert _looks_like_dead_browser("Target page, context or browser has been closed")
+    assert _looks_like_dead_browser("Browser has disconnected")
+    assert not _looks_like_dead_browser("TypeError: Failed to fetch")
+
+
+def test_poller_rebuilds_the_browser_rather_than_retrying():
+    body = (ROOT / "src" / "subsniper" / "poller.py").read_text(encoding="utf-8")
+    assert "except BrowserGone" in body, "must catch it before the generic handler"
+    assert body.index("except BrowserGone") < body.index("except TransientError"), (
+        "BrowserGone must be caught first, or the generic handler swallows it"
+    )
+    handler = body[body.index("async def _handle_browser_gone"):
+                   body.index("async def _handle_auth_error")]
+    assert "client.restart()" in handler, "must actually rebuild the browser"
+
+
+def test_browser_profile_avoids_the_project_folder_on_windows(monkeypatch, cfg):
+    """Projects commonly live under Documents, which OneDrive syncs by default."""
+    from subsniper.frontline import browser_profile_dir
+
+    monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\Someone\AppData\Local")
+    path = browser_profile_dir(cfg)
+    assert "AppData" in str(path), "should sit in LOCALAPPDATA, never the repo"
+    assert "SubSniper" in str(path)
+
+
+def test_browser_profile_is_overridable(cfg, tmp_path, monkeypatch):
+    from subsniper.frontline import browser_profile_dir
+
+    monkeypatch.setitem(cfg.raw["frontline"], "browser_profile_dir", str(tmp_path))
+    assert browser_profile_dir(cfg) == tmp_path

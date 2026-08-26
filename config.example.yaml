@@ -17,6 +17,16 @@ frontline:
   # Seconds to wait for the login flow to settle before first poll
   login_settle_seconds: 8
 
+  # Where the headless browser keeps its profile. Leave null to use a sensible
+  # default (LOCALAPPDATA on Windows), which is what you want.
+  #
+  # Do NOT put this inside OneDrive, Dropbox, or any synced folder - including
+  # Documents, which Windows syncs by default. A browser profile is thousands
+  # of files with SQLite locks under constant write; a sync engine reaching
+  # into it corrupts the profile and kills the browser mid-run. That failure
+  # looks like "Target page, context or browser has been closed".
+  browser_profile_dir: null
+
 polling:
   # Adaptive intervals. Times are LOCAL to the machine running this.
   # Jobs get posted in bursts; poll hard during those windows, back off otherwise.

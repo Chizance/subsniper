@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,6 +57,50 @@ class TransientError(RuntimeError):
     """A poll failed in a way that's probably worth retrying."""
 
 
+class BrowserGone(TransientError):
+    """The browser or its context died.
+
+    Distinct from TransientError because retrying is pointless: every
+    subsequent poll fails identically until the browser is rebuilt. Observed in
+    the field as "Target page, context or browser has been closed" repeating
+    forever while the service sat in backoff, looking alive but blind.
+    """
+
+
+# Playwright phrases this several ways depending on what died first.
+_BROWSER_DEAD_SIGNS = (
+    "has been closed",
+    "target closed",
+    "browser has disconnected",
+    "connection closed",
+    "browser closed",
+)
+
+
+def _looks_like_dead_browser(message: str) -> bool:
+    lowered = str(message).lower()
+    return any(sign in lowered for sign in _BROWSER_DEAD_SIGNS)
+
+
+def browser_profile_dir(cfg: Config) -> Path:
+    """Where Chromium keeps its profile.
+
+    Defaults to LOCALAPPDATA on Windows rather than the project folder. A
+    Chromium profile is thousands of files including SQLite databases held
+    under lock and written constantly. Projects commonly live under Documents,
+    which OneDrive syncs by default - and a sync engine reaching into that
+    profile corrupts it and takes the browser down mid-run. LOCALAPPDATA is
+    never synced.
+    """
+    configured = cfg.get("frontline.browser_profile_dir")
+    if configured:
+        return Path(str(configured)).expanduser()
+    local = os.getenv("LOCALAPPDATA")
+    if local:
+        return Path(local) / "SubSniper" / "browser"
+    return cfg.root / "state" / "browser"
+
+
 @dataclass
 class PollResult:
     jobs: list[Job]
@@ -76,8 +121,9 @@ class FrontlineClient:
     # -- lifecycle -------------------------------------------------------------
     async def start(self) -> None:
         self._pw = await async_playwright().start()
-        state_path = self.cfg.root / "state" / "browser"
+        state_path = browser_profile_dir(self.cfg)
         state_path.mkdir(parents=True, exist_ok=True)
+        log.info("browser profile: %s", state_path)
 
         # A persistent context keeps the Frontline session across restarts, so a
         # service restart at 4am doesn't force a fresh login (and a fresh login
@@ -99,7 +145,25 @@ class FrontlineClient:
                 except Exception:  # pragma: no cover - best effort teardown
                     pass
         if self._pw is not None:
-            await self._pw.stop()
+            try:
+                await self._pw.stop()
+            except Exception:  # pragma: no cover - teardown is best effort
+                pass
+        self._ctx = None
+        self._page = None
+        self._pw = None
+
+    async def restart(self) -> None:
+        """Tear the browser down and build a fresh one.
+
+        The only way back from a dead browser. Without this the poll loop
+        retries forever against a closed context.
+        """
+        log.warning("rebuilding the browser after it died")
+        await self.close()
+        self._origin = ""
+        self._auth_failures = 0
+        await self.start()
 
     # -- auth ------------------------------------------------------------------
     async def ensure_authenticated(self) -> None:
@@ -248,11 +312,13 @@ class FrontlineClient:
         assert self._ctx is not None and self._page is not None
 
         started = time.perf_counter()
+        api_error = ""
         try:
             resp = await self._ctx.request.get(url, timeout=25_000)
             html = await resp.text()
             return resp.status, html, int((time.perf_counter() - started) * 1000)
         except Exception as api_exc:  # noqa: BLE001 - fall through to the backup
+            api_error = str(api_exc)
             log.debug("context request failed (%s), trying in-page fetch", api_exc)
 
         try:
@@ -274,6 +340,10 @@ class FrontlineClient:
                 int((time.perf_counter() - started) * 1000),
             )
         except Exception as exc:
+            if _looks_like_dead_browser(exc) or _looks_like_dead_browser(api_error):
+                raise BrowserGone(
+                    f"the browser is no longer running: {exc}"
+                ) from exc
             raise TransientError(f"both fetch paths failed: {exc}") from exc
 
     # -- accept ----------------------------------------------------------------
