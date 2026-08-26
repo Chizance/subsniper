@@ -32,6 +32,41 @@ waking up, unlocking, and tapping — it's done before a person could react.
 
 ---
 
+## How often it checks
+
+It doesn't check at one fixed rate. It checks **hard when jobs actually get
+posted, and slowly the rest of the time.**
+
+| When | How often | Why |
+|---|---|---|
+| **Weekday mornings, 5:00–8:30am** | every **5 seconds** | The rush. Most jobs get posted here, and this is the race you're trying to win. |
+| **Weekday afternoons, 2:00–6:00pm** | every 10 seconds | Teachers calling out for tomorrow. |
+| **Evenings, 6:00–10:00pm** (Sun–Thu) | every 20 seconds | Late postings for the next day. |
+| **Everything else** | every 2 minutes | Overnight, weekends, midday. Jobs are rare, so it idles. |
+
+**It never stops.** Leave it running and it watches around the clock — just
+faster or slower depending on the hour. So if you check on it at 3pm on a
+Sunday and it seems quiet, that's correct: it's looking every 2 minutes because
+nothing gets posted then.
+
+Each check is also given a small random nudge (up to 25% earlier or later) so
+it isn't hitting Frontline on a perfect metronome.
+
+**Why not 5 seconds all day?** Two reasons. It would be about 17,000 requests a
+day instead of roughly 3,800 — far more conspicuous, and Frontline's rules are
+already the main risk here. And it would buy nothing: checking every 5 seconds
+at 2am doesn't find jobs that aren't there.
+
+For comparison, SubAlert and every similar app check **once every 60 seconds,
+all day** — about 1,400 times. During the morning rush SubSniper checks 12×
+more often than they do, and stays quieter than they are the rest of the time.
+
+You can change any of this in `config.yaml` under `polling:` — each window has
+its own days, hours, and `interval_seconds`. It refuses to start with anything
+under 3 seconds.
+
+---
+
 ## Before you start
 
 You'll need:
@@ -328,6 +363,21 @@ Old backup folders are safe to delete once things have been working for a while.
 ---
 
 ## First thing to run when it "didn't work"
+
+```
+.venv\Scripts\python.exe -m subsniper doctor
+```
+
+This checks everything at once — whether it's running, what your settings are,
+whether your logins are filled in, what it's been doing, and whether it can
+still reach Frontline and your phone right now. It saves the result as
+**`subsniper-report.txt`** in the SubSniper folder.
+
+**Send that file to whoever set this up for you.** It contains no passwords —
+only whether each one is filled in. It answers in one go what otherwise takes a
+dozen back-and-forth messages.
+
+If you'd rather just see the history without the live tests:
 
 ```
 .venv\Scripts\python.exe -m subsniper diagnose

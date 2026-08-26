@@ -464,3 +464,39 @@ def test_scripts_do_not_rely_on_their_own_closing_prompt():
             f"{name} should let the .bat handle pausing - its own prompt is "
             "unreachable when the script dies early"
         )
+
+
+# -- the doctor report ---------------------------------------------------------
+
+def test_doctor_never_prints_credential_values():
+    """The report is meant to be pasted into a chat or emailed.
+
+    It must report whether each credential is set, never what it is.
+    """
+    body = (ROOT / "src" / "subsniper" / "__main__.py").read_text(encoding="utf-8")
+    doc = body[body.index("def cmd_doctor"):body.index("def cmd_diagnose")]
+    assert "len(val)" in doc, "should report length, not value"
+    for leak in ("os.getenv(key)}", "{val}", "creds.password", "creds.username"):
+        assert leak not in doc, f"doctor must not emit {leak}"
+
+
+def test_doctor_warns_when_filtered_jobs_are_silent():
+    """notify_on_nonmatching=False makes a rejected job look like no job.
+
+    That ambiguity is the single biggest obstacle to diagnosing "nothing is
+    arriving", so the report has to name it.
+    """
+    body = (ROOT / "src" / "subsniper" / "__main__.py").read_text(encoding="utf-8")
+    doc = body[body.index("def cmd_doctor"):body.index("def cmd_diagnose")]
+    assert "notify_on_nonmatching" in doc
+    assert "NO notification" in doc
+
+
+def test_doctor_reports_every_filter_that_can_reject_a_job(cfg):
+    """If a filter can silently drop a job, the report must show its value."""
+    body = (ROOT / "src" / "subsniper" / "__main__.py").read_text(encoding="utf-8")
+    doc = body[body.index("def cmd_doctor"):body.index("def cmd_diagnose")]
+    for setting in ("earliest_start", "latest_end", "min_duration_minutes",
+                    "allowed_weekdays", "min_lead_time_minutes",
+                    "role_include", "denylist"):
+        assert setting in doc, f"doctor omits {setting}, which can reject jobs"

@@ -1,0 +1,96 @@
+SubSniper report - generated 2026-08-26 18:39:41
+
+==============================================================
+1. SYSTEM
+==============================================================
+subsniper version : 1.0.0
+python            : 3.11.15
+platform          : Linux 6.18.44-fc-v21
+working directory : /root/subsniper
+project directory : /root/subsniper
+installed build   : unknown (no VERSION.txt)
+  dependency playwright   OK
+  dependency bs4          OK
+  dependency httpx        OK
+  dependency yaml         OK
+  dependency dotenv       OK
+
+==============================================================
+2. IS IT RUNNING RIGHT NOW
+==============================================================
+NO - no lock file. SubSniper is not running.
+starts today      : 0
+accepted today    : 0
+heartbeat sent    : False
+job state age     : never written
+
+==============================================================
+3. CONFIGURATION
+==============================================================
+dry_run           : True   (True = alerts only, never accepts)
+max accepts/day   : 2
+kill switch       : off
+
+FILTERS - a job must pass every one of these:
+  starts no earlier than : 07:00
+  ends no later than     : 16:00
+  at least this long     : 180 minutes
+  on these days          : ['mon', 'tue', 'wed', 'thu', 'fri']
+  starting at least      : 30 min from now
+  title must match       : ['teacher', '\\bteach\\b', 'instructor']
+  title must NOT match   : 23 exclusion patterns
+  only these schools     : (any)
+  never these schools    : (none)
+
+POLL SCHEDULE:
+  early-morning-rush     05:00-08:30 every 5s
+  afternoon-postings     14:00-18:00 every 10s
+  evening                18:00-22:00 every 20s
+  everything else        every 120s
+
+==============================================================
+4. CREDENTIALS (values are never shown)
+==============================================================
+  FRONTLINE_USERNAME     *** MISSING ***
+  FRONTLINE_PASSWORD     *** MISSING ***
+  FRONTLINE_PIN          blank (optional)
+  PUSHOVER_USER_KEY      *** MISSING ***
+  PUSHOVER_API_TOKEN     *** MISSING ***
+
+==============================================================
+5. WHAT IT HAS BEEN DOING (last 3 days)
+==============================================================
+  alive                      6
+  job_skipped                2
+  service_start              1
+  primed                     1
+
+coverage gaps over 10 min: 0
+
+jobs seen but filtered out:
+    1x  time: starts 6:45AM, before earliest_start 7:00AM
+    1x  time: duration 120min under minimum 180min
+
+errors: 0
+
+last 15 events:
+  08-26 15:39:40  service_start
+  08-26 15:39:40  primed
+  08-26 15:39:40  alive
+  08-26 15:44:40  alive
+  08-26 15:49:40  alive
+  08-26 15:54:40  alive
+  08-26 15:59:40  alive
+  08-26 16:04:40  alive
+  08-26 16:39:40  job_skipped  Teacher, Grade 2 @ Oak Elementary
+  08-26 16:39:40  job_skipped  Teacher, Music @ Elm Middle
+
+==============================================================
+6. LIVE TESTS
+==============================================================
+skipped (--no-network)
+
+==============================================================
+7. LAST 30 LOG LINES
+==============================================================
+  2026-08-19 05:00:01 INFO subsniper.poller SubSniper started | dry_run=True

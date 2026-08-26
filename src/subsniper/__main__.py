@@ -214,6 +214,280 @@ def cmd_version(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """Collect everything needed to diagnose a problem into one file.
+
+    Exists because "it doesn't work" is not actionable, and gathering the
+    pieces one screenshot at a time has repeatedly cost days. This asks every
+    question at once and writes a single report that can be pasted or sent.
+
+    Credential VALUES are never included - only whether each one is set.
+    """
+    import platform
+    from collections import Counter
+
+    out: list[str] = []
+
+    def w(line: str = "") -> None:
+        out.append(line)
+
+    def section(name: str) -> None:
+        w()
+        w("=" * 62)
+        w(name)
+        w("=" * 62)
+
+    w(f"SubSniper report - generated {datetime.now():%Y-%m-%d %H:%M:%S}")
+
+    # -- 1. what is installed --------------------------------------------------
+    section("1. SYSTEM")
+    try:
+        from . import __version__
+        w(f"subsniper version : {__version__}")
+    except Exception as exc:  # noqa: BLE001
+        w(f"subsniper version : ERROR {exc}")
+    w(f"python            : {sys.version.split()[0]}")
+    w(f"platform          : {platform.system()} {platform.release()}")
+    w(f"working directory : {Path.cwd()}")
+
+    root = Path(args.config).expanduser().resolve().parent
+    if not root.exists():
+        root = Path.cwd()
+    w(f"project directory : {root}")
+
+    stamp = root / "VERSION.txt"
+    w(f"installed build   : {stamp.read_text(encoding='utf-8').strip().splitlines()[0] if stamp.exists() else 'unknown (no VERSION.txt)'}")
+
+    for dep in ("playwright", "bs4", "httpx", "yaml", "dotenv"):
+        try:
+            __import__(dep)
+            w(f"  dependency {dep:<12} OK")
+        except Exception as exc:  # noqa: BLE001
+            w(f"  dependency {dep:<12} MISSING ({exc})")
+
+    # -- 2. is it running ------------------------------------------------------
+    section("2. IS IT RUNNING RIGHT NOW")
+    try:
+        store = Store(root)
+        lock = store.lock_path
+        if not lock.exists():
+            w("NO - no lock file. SubSniper is not running.")
+        else:
+            age = datetime.now().timestamp() - lock.stat().st_mtime
+            if age < 90:
+                w(f"YES - last heartbeat {age:.0f}s ago.")
+            else:
+                w(f"NO - lock file is stale ({age/60:.0f} minutes old). It stopped or crashed.")
+        w(f"starts today      : {store.starts_today()}")
+        w(f"accepted today    : {store.accepts_today()}")
+        w(f"heartbeat sent    : {store.heartbeat_sent_today()}")
+        seen_age = store.seen_age_seconds()
+        w(f"job state age     : {'never written' if seen_age is None else f'{seen_age/60:.0f} min'}")
+    except Exception as exc:  # noqa: BLE001
+        w(f"ERROR reading state: {exc}")
+
+    # -- 3. configuration ------------------------------------------------------
+    section("3. CONFIGURATION")
+    cfg = None
+    try:
+        cfg = load_config(args.config, args.env, require_credentials=False)
+        w(f"dry_run           : {cfg.dry_run}   (True = alerts only, never accepts)")
+        w(f"max accepts/day   : {cfg.get('autoaccept.max_accepts_per_day')}")
+        kill = cfg.kill_switch_path
+        w(f"kill switch       : {'ACTIVE - accepting is blocked' if kill and kill.exists() else 'off'}")
+        w()
+        w("FILTERS - a job must pass every one of these:")
+        w(f"  starts no earlier than : {cfg.get('filters.time.earliest_start')}")
+        w(f"  ends no later than     : {cfg.get('filters.time.latest_end')}")
+        w(f"  at least this long     : {cfg.get('filters.time.min_duration_minutes')} minutes")
+        w(f"  on these days          : {cfg.get('filters.time.allowed_weekdays')}")
+        w(f"  starting at least      : {cfg.get('filters.time.min_lead_time_minutes')} min from now")
+        w(f"  title must match       : {[p.pattern for p in cfg.role_include]}")
+        w(f"  title must NOT match   : {len(cfg.role_exclude)} exclusion patterns")
+        allow = cfg.get('filters.location.allowlist') or []
+        deny = cfg.get('filters.location.denylist') or []
+        w(f"  only these schools     : {allow if allow else '(any)'}")
+        w(f"  never these schools    : {deny if deny else '(none)'}")
+        w()
+        w("POLL SCHEDULE:")
+        for win in cfg.poll_windows:
+            w(f"  {win.name:<22} {win.start:%H:%M}-{win.end:%H:%M} every {win.interval_seconds:.0f}s")
+        w(f"  {'everything else':<22} every {cfg.get('polling.default_interval_seconds')}s")
+
+        # The silence trap: while tuning, a filtered-out job produces no
+        # notification at all, which is indistinguishable from no job being
+        # posted. That ambiguity is exactly what makes "it doesn't work"
+        # impossible to act on.
+        if not cfg.get("notifications.notify_on_nonmatching", False):
+            w()
+            w("NOTE: notify_on_nonmatching is OFF.")
+            w("  Jobs that fail the filters above produce NO notification, so a")
+            w("  job that was posted and rejected looks identical to no job at")
+            w("  all. If you are trying to work out why nothing is arriving, set")
+            w("  notifications.notify_on_nonmatching: true in config.yaml for a")
+            w("  few days - you will get a silent alert for every job it saw and")
+            w("  skipped, with the reason.")
+    except Exception as exc:  # noqa: BLE001
+        w(f"ERROR loading config: {exc}")
+
+    # -- 4. credentials present (never values) ---------------------------------
+    section("4. CREDENTIALS (values are never shown)")
+    import os
+    from dotenv import load_dotenv
+
+    load_dotenv(Path(args.env).expanduser(), override=False)
+    for key, required in (
+        ("FRONTLINE_USERNAME", True), ("FRONTLINE_PASSWORD", True),
+        ("FRONTLINE_PIN", False),
+        ("PUSHOVER_USER_KEY", True), ("PUSHOVER_API_TOKEN", True),
+    ):
+        val = (os.getenv(key) or "").strip()
+        if val:
+            w(f"  {key:<22} set ({len(val)} characters)")
+        else:
+            w(f"  {key:<22} {'*** MISSING ***' if required else 'blank (optional)'}")
+
+    # -- 5. recent activity ----------------------------------------------------
+    section("5. WHAT IT HAS BEEN DOING (last 3 days)")
+    audit = root / "logs" / "audit.jsonl"
+    if not audit.exists():
+        w("No audit log. It has never completed a startup in this folder.")
+    else:
+        cutoff = datetime.now() - timedelta(days=3)
+        events = []
+        with audit.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    rec = json.loads(line)
+                    ts = datetime.fromisoformat(rec["ts"])
+                except (json.JSONDecodeError, KeyError, ValueError):
+                    continue
+                if ts >= cutoff:
+                    rec["_ts"] = ts
+                    events.append(rec)
+        if not events:
+            w("No activity in the last 3 days.")
+        else:
+            counts = Counter(e.get("event") for e in events)
+            for name, n in counts.most_common():
+                w(f"  {name:<26} {n}")
+            w()
+            alives = sorted(e["_ts"] for e in events if e.get("event") == "alive")
+            gaps = [(a, b, (b - a).total_seconds() / 60)
+                    for a, b in zip(alives, alives[1:]) if (b - a).total_seconds() > 600]
+            w(f"coverage gaps over 10 min: {len(gaps)}")
+            for a, b, mins in gaps[-6:]:
+                flag = "  <-- COVERS MORNING RUSH" if _overlaps_rush(a, b) else ""
+                w(f"  {a:%m-%d %H:%M} -> {b:%m-%d %H:%M}  ({mins:.0f} min){flag}")
+            w()
+            reasons: Counter = Counter()
+            for e in events:
+                if e.get("event") == "job_skipped":
+                    for r in e.get("reasons", []):
+                        reasons[str(r)[:70]] += 1
+            if reasons:
+                w("jobs seen but filtered out:")
+                for reason, n in reasons.most_common(10):
+                    w(f"  {n:>3}x  {reason}")
+            else:
+                w("jobs seen but filtered out: none")
+            w()
+            errs = [e for e in events if e.get("event") in ("poll_error", "auth_error")]
+            w(f"errors: {len(errs)}")
+            seen_err = set()
+            for e in reversed(errs):
+                key = str(e.get("error", ""))[:120]
+                if key in seen_err:
+                    continue
+                seen_err.add(key)
+                w(f"  {e['_ts']:%m-%d %H:%M}  {key}")
+                if len(seen_err) >= 5:
+                    break
+            w()
+            w("last 15 events:")
+            for e in events[-15:]:
+                extra = ""
+                if e.get("event") in ("job_matched", "job_skipped", "accept_attempt"):
+                    job = e.get("job", {})
+                    extra = f"  {job.get('title','?')} @ {job.get('school','?')}"
+                w(f"  {e['_ts']:%m-%d %H:%M:%S}  {e.get('event','?')}{extra}")
+
+    # -- 6. live connectivity --------------------------------------------------
+    section("6. LIVE TESTS")
+    if args.no_network:
+        w("skipped (--no-network)")
+    elif cfg is None:
+        w("skipped - config failed to load")
+    else:
+        try:
+            cfg_full = load_config(args.config, args.env, require_credentials=True)
+        except ConfigError as exc:
+            cfg_full = None
+            w(f"cannot run live tests: {exc}")
+
+        if cfg_full is not None:
+            from .notify import Notifier
+
+            notifier = Notifier(cfg_full)
+            try:
+                ok = notifier.heartbeat("SubSniper doctor: notification test.")
+                w(f"Pushover        : {'OK - your phone should have buzzed' if ok else 'FAILED - check the keys in .env'}")
+            except Exception as exc:  # noqa: BLE001
+                w(f"Pushover        : ERROR {exc}")
+            finally:
+                notifier.close()
+
+            from .frontline import FrontlineClient
+
+            async def _probe() -> None:
+                client = FrontlineClient(cfg_full)
+                try:
+                    await client.start()
+                    res = await client.poll()
+                    w(f"Frontline       : OK - logged in, {len(res.jobs)} job(s) listed, {res.latency_ms}ms")
+                    for job in res.jobs:
+                        verdict = evaluate(job, cfg_full)
+                        mark = "WOULD MATCH" if verdict.matched else "would skip "
+                        w(f"    {mark}  {job.summary()}")
+                        if not verdict.matched:
+                            w(f"                 reason: {verdict.reason_text}")
+                finally:
+                    await client.close()
+
+            try:
+                asyncio.run(_probe())
+            except Exception as exc:  # noqa: BLE001
+                w(f"Frontline       : FAILED - {type(exc).__name__}: {exc}")
+
+    # -- 7. log tail -----------------------------------------------------------
+    section("7. LAST 30 LOG LINES")
+    applog = root / "logs" / "subsniper.log"
+    if applog.exists():
+        try:
+            lines = applog.read_text(encoding="utf-8", errors="replace").splitlines()
+            for line in lines[-30:]:
+                w("  " + line)
+        except OSError as exc:
+            w(f"could not read log: {exc}")
+    else:
+        w("no log file yet")
+
+    report = "\n".join(out)
+    print(report)
+
+    dest = root / "subsniper-report.txt"
+    try:
+        dest.write_text(report, encoding="utf-8")
+        print()
+        print("=" * 62)
+        print(f"Saved to: {dest}")
+        print("Send that file to whoever is helping you. It contains no passwords.")
+        print("=" * 62)
+    except OSError as exc:
+        print(f"\nCould not save report: {exc}")
+    return 0
+
+
 def cmd_diagnose(args: argparse.Namespace) -> int:
     """Read the audit log and report what actually happened.
 
@@ -364,6 +638,11 @@ def main(argv: list[str] | None = None) -> int:
     p_ver = sub.add_parser("version", help="show version and check for updates")
     p_ver.add_argument("--no-check", action="store_true", help="don't contact GitHub")
     p_ver.set_defaults(func=cmd_version)
+
+    p_doc = sub.add_parser("doctor", help="collect everything into one report file")
+    p_doc.add_argument("--no-network", action="store_true",
+                       help="skip the live Pushover and Frontline tests")
+    p_doc.set_defaults(func=cmd_doctor)
 
     p_diag = sub.add_parser("diagnose", help="read the audit log and report what happened")
     p_diag.add_argument("--days", type=int, default=2, help="how far back to look (default 2)")
