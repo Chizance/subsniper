@@ -1,19 +1,25 @@
-SubSniper report - generated 2026-08-26 18:39:41
+SubSniper report - generated 2026-08-26 20:12:59
 
 ==============================================================
 1. SYSTEM
 ==============================================================
 subsniper version : 1.0.0
-python            : 3.11.15
-platform          : Linux 6.18.44-fc-v21
-working directory : /root/subsniper
-project directory : /root/subsniper
+python            : 3.14.7
+platform          : Windows 11
+working directory : C:\vscode_projects\subsniper
+project directory : C:\vscode_projects\subsniper
 installed build   : unknown (no VERSION.txt)
   dependency playwright   OK
   dependency bs4          OK
   dependency httpx        OK
   dependency yaml         OK
   dependency dotenv       OK
+
+==============================================================
+1b. BROWSER PROFILE LOCATION
+==============================================================
+profile dir       : C:\Users\a23jo\AppData\Local\SubSniper\browser
+not inside a known cloud-synced folder - good
 
 ==============================================================
 2. IS IT RUNNING RIGHT NOW
@@ -32,9 +38,9 @@ max accepts/day   : 2
 kill switch       : off
 
 FILTERS - a job must pass every one of these:
-  starts no earlier than : 07:00
-  ends no later than     : 16:00
-  at least this long     : 180 minutes
+  starts no earlier than : 05:00
+  ends no later than     : 20:00
+  at least this long     : None minutes
   on these days          : ['mon', 'tue', 'wed', 'thu', 'fri']
   starting at least      : 30 min from now
   title must match       : ['teacher', '\\bteach\\b', 'instructor']
@@ -48,49 +54,35 @@ POLL SCHEDULE:
   evening                18:00-22:00 every 20s
   everything else        every 120s
 
+NOTE: notify_on_nonmatching is OFF.
+  Jobs that fail the filters above produce NO notification, so a
+  job that was posted and rejected looks identical to no job at
+  all. If you are trying to work out why nothing is arriving, set
+  notifications.notify_on_nonmatching: true in config.yaml for a
+  few days - you will get a silent alert for every job it saw and
+  skipped, with the reason.
+
 ==============================================================
 4. CREDENTIALS (values are never shown)
 ==============================================================
-  FRONTLINE_USERNAME     *** MISSING ***
-  FRONTLINE_PASSWORD     *** MISSING ***
+  FRONTLINE_USERNAME     set (11 characters)
+  FRONTLINE_PASSWORD     set (8 characters)
   FRONTLINE_PIN          blank (optional)
-  PUSHOVER_USER_KEY      *** MISSING ***
-  PUSHOVER_API_TOKEN     *** MISSING ***
+  PUSHOVER_USER_KEY      set (30 characters)
+  PUSHOVER_API_TOKEN     set (30 characters)
 
 ==============================================================
 5. WHAT IT HAS BEEN DOING (last 3 days)
 ==============================================================
-  alive                      6
-  job_skipped                2
-  service_start              1
-  primed                     1
-
-coverage gaps over 10 min: 0
-
-jobs seen but filtered out:
-    1x  time: starts 6:45AM, before earliest_start 7:00AM
-    1x  time: duration 120min under minimum 180min
-
-errors: 0
-
-last 15 events:
-  08-26 15:39:40  service_start
-  08-26 15:39:40  primed
-  08-26 15:39:40  alive
-  08-26 15:44:40  alive
-  08-26 15:49:40  alive
-  08-26 15:54:40  alive
-  08-26 15:59:40  alive
-  08-26 16:04:40  alive
-  08-26 16:39:40  job_skipped  Teacher, Grade 2 @ Oak Elementary
-  08-26 16:39:40  job_skipped  Teacher, Music @ Elm Middle
+No audit log. It has never completed a startup in this folder.
 
 ==============================================================
 6. LIVE TESTS
 ==============================================================
-skipped (--no-network)
+Pushover        : OK - your phone should have buzzed
+Frontline       : OK - logged in, 0 job(s) listed, 530ms
 
 ==============================================================
 7. LAST 30 LOG LINES
 ==============================================================
-  2026-08-19 05:00:01 INFO subsniper.poller SubSniper started | dry_run=True
+no log file yet

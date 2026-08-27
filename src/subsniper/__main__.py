@@ -258,12 +258,32 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     stamp = root / "VERSION.txt"
     w(f"installed build   : {stamp.read_text(encoding='utf-8').strip().splitlines()[0] if stamp.exists() else 'unknown (no VERSION.txt)'}")
 
-    for dep in ("playwright", "bs4", "httpx", "yaml", "dotenv"):
+    # Report versions, not just importability. "playwright OK" says nothing
+    # about whether that build supports the Python running it - which is
+    # exactly the question you ask when the browser misbehaves.
+    from importlib import metadata
+
+    for dep, dist in (("playwright", "playwright"), ("bs4", "beautifulsoup4"),
+                      ("httpx", "httpx"), ("yaml", "PyYAML"),
+                      ("dotenv", "python-dotenv")):
         try:
             __import__(dep)
-            w(f"  dependency {dep:<12} OK")
+            try:
+                ver = metadata.version(dist)
+            except Exception:  # noqa: BLE001
+                ver = "version unknown"
+            w(f"  dependency {dep:<12} OK   ({ver})")
         except Exception as exc:  # noqa: BLE001
             w(f"  dependency {dep:<12} MISSING ({exc})")
+
+    # Chromium must actually launch, not just import.
+    try:
+        import subprocess
+        r = subprocess.run([sys.executable, "-m", "playwright", "--version"],
+                           capture_output=True, text=True, timeout=30)
+        w(f"  playwright CLI    : {(r.stdout or r.stderr).strip() or 'no output'}")
+    except Exception as exc:  # noqa: BLE001
+        w(f"  playwright CLI    : could not run ({exc})")
 
     # -- 2. is it running ------------------------------------------------------
     section("1b. BROWSER PROFILE LOCATION")
