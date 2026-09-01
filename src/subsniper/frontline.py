@@ -517,6 +517,7 @@ class FrontlineClient:
 
         hits = 0
         checks = 0
+        consecutive_failures = 0
         while True:
             checks += 1
             try:
@@ -527,9 +528,26 @@ class FrontlineClient:
                 rendered = await self._page.content()
                 rend_n = len(parse_jobs(rendered))
             except Exception as exc:  # noqa: BLE001 - a watcher that dies is useless
+                consecutive_failures += 1
                 log.warning("check %d failed (%s); continuing", checks, str(exc)[:160])
+                # Continuing is not enough on its own. A dead browser fails every
+                # check identically until it is rebuilt, so an unattended watcher
+                # would burn the whole night retrying a corpse - the same way the
+                # poller did in the field before it learned to restart.
+                if consecutive_failures >= 3:
+                    log.warning("3 failures in a row - rebuilding the browser")
+                    try:
+                        await self.restart()
+                        consecutive_failures = 0
+                    except Exception as restart_exc:  # noqa: BLE001
+                        log.error("browser rebuild failed: %s", restart_exc)
+                    self._page.on(
+                        "response", lambda r: asyncio.ensure_future(_on_response(r))
+                    )
                 await asyncio.sleep(interval)
                 continue
+
+            consecutive_failures = 0
 
             log.info("check %d: raw=%d rendered=%d", checks, raw_n, rend_n)
 

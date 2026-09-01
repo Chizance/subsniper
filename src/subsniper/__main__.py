@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import signal
+import time
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -322,6 +323,30 @@ def _capture_watch(cfg, out_dir, args) -> int:
         print("SubSniper is already running. Stop it first - two copies polling")
         print(f"one account doubles the request rate. Lock file: {store.lock_path}")
         return 1
+
+    # An unattended watcher on a laptop that sleeps captures nothing and
+    # reports no error. Same reason `run` does this.
+    from .keepawake import keep_system_awake
+
+    print(f"stay-awake: {keep_system_awake()}")
+
+    if args.start_at:
+        try:
+            hh, mm = (int(x) for x in args.start_at.split(":"))
+            target = datetime.now().replace(hour=hh, minute=mm, second=0, microsecond=0)
+        except ValueError:
+            print(f"could not read --start-at {args.start_at!r}; expected HH:MM")
+            return 1
+        if target <= datetime.now():
+            target += timedelta(days=1)
+        wait = (target - datetime.now()).total_seconds()
+        print(f"idling until {target:%a %H:%M} ({wait / 3600:.1f}h) before watching.")
+        print("Leave this window open. Ctrl+C to cancel.")
+        try:
+            time.sleep(wait)
+        except KeyboardInterrupt:
+            print("\nCancelled.")
+            return 0
 
     notifier = Notifier(cfg)
 
@@ -870,6 +895,9 @@ def main(argv: list[str] | None = None) -> int:
                        help="seconds between checks in --watch mode (default 15)")
     p_cap.add_argument("--keep-going", action="store_true",
                        help="don't stop after the first catch")
+    p_cap.add_argument("--start-at", metavar="HH:MM",
+                       help="idle until this time before watching, e.g. 04:30. "
+                            "Lets you start it tonight without polling all night.")
     p_cap.set_defaults(func=cmd_capture)
 
     p_diag = sub.add_parser("diagnose", help="read the audit log and report what happened")
