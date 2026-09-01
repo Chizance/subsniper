@@ -11,3 +11,5 @@ __pycache__/
 Start SubSniper.bat
 backups/
 VERSION.txt
+capture/
+.pytest_cache/

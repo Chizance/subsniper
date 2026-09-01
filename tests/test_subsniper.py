@@ -546,3 +546,79 @@ def test_browser_profile_is_overridable(cfg, tmp_path, monkeypatch):
 
     monkeypatch.setitem(cfg.raw["frontline"], "browser_profile_dir", str(tmp_path))
     assert browser_profile_dir(cfg) == tmp_path
+
+
+# --------------------------------------------------------------------------
+# keep-awake
+# --------------------------------------------------------------------------
+
+def test_keep_awake_is_a_noop_off_windows(monkeypatch):
+    """It must never raise. A failed stay-awake request is a degraded run,
+    not a reason to refuse to poll."""
+    from subsniper import keepawake
+
+    monkeypatch.setattr(keepawake.platform, "system", lambda: "Linux")
+    assert "not needed" in keepawake.keep_system_awake()
+    keepawake.release()  # must not raise
+
+
+def test_keep_awake_survives_a_broken_ctypes(monkeypatch):
+    from subsniper import keepawake
+
+    monkeypatch.setattr(keepawake.platform, "system", lambda: "Windows")
+    monkeypatch.setitem(__import__("sys").modules, "ctypes", None)
+    status = keepawake.keep_system_awake()
+    assert "FAILED" in status
+
+
+# --------------------------------------------------------------------------
+# capture: the raw-vs-rendered distinction the whole app depends on
+# --------------------------------------------------------------------------
+
+def test_parser_finds_nothing_in_an_unrendered_template():
+    """The failure that cost us twelve days of empty polls.
+
+    Frontline ships an empty `#jobTemplate` in the HTML and fills it from
+    JavaScript. Both of our fetch paths retrieve raw HTML without running
+    scripts, so the parser saw this - forever - while a human at the same URL
+    saw a full list. Fast, HTTP 200, no errors, no jobs.
+    """
+    from subsniper.parser import parse_jobs
+
+    unrendered = """
+    <html><body>
+      <div id="availableJobs"><table class="jobList"><tbody id="rows"></tbody></table></div>
+      <script id="jobTemplate" type="text/x-template">
+        <tbody class="job" id="job_${id}">
+          <tr class="summary"><td class="date"><span class="itemDate">${date}</span></td>
+          <td><span class="title">${title}</span></td></tr>
+        </tbody>
+      </script>
+    </body></html>
+    """
+    assert parse_jobs(unrendered) == []
+
+
+def test_parser_finds_the_same_rows_once_they_are_rendered():
+    from subsniper.parser import parse_jobs
+
+    rendered = """
+    <html><body>
+      <div id="availableJobs"><table class="jobList">
+        <tbody class="job" id="job_9911">
+          <tr class="summary">
+            <td class="date"><span class="itemDate">9/2/2026</span></td>
+            <td class="times"><span class="startTime">8:00 AM</span>
+                              <span class="endTime">3:00 PM</span></td>
+            <td class="duration"><span class="durationName">Full Day</span></td>
+            <td class="location"><span class="locationName">Test Elementary</span></td>
+            <td><span class="name">A Person</span>
+                <span class="title">Teacher, Grade 3</span></td>
+          </tr>
+        </tbody>
+      </table></div>
+    </body></html>
+    """
+    jobs = parse_jobs(rendered)
+    assert len(jobs) == 1
+    assert "Teacher" in jobs[0].role_text

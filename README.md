@@ -425,17 +425,67 @@ unless it's installed as a scheduled task. Just double-click
 
 ---
 
+## When it finds nothing, ever
+
+If the audit log shows polls succeeding but *no jobs at all* over days — not
+"jobs it skipped", genuinely none — the question is whether the job rows are
+in the page SubSniper downloads, or whether they get drawn afterwards by the
+site's own JavaScript. SubSniper reads the downloaded page, so if it's the
+latter, it will never see anything.
+
+```
+python -m subsniper capture
+```
+
+Run on its own it fetches the page both ways and compares. Open jobs only last
+30-60 seconds, so most of the time there won't be one posted — that's fine, it
+still checks the page's structure and reports what it finds.
+
+To settle it beyond doubt you need a real job, and nobody can notice one and
+type a command inside a 45-second window. So let it wait for you:
+
+```
+python -m subsniper capture --watch
+```
+
+It checks every 15 seconds and, the instant a job appears, saves everything and
+buzzes your phone. Leave it running through a morning rush. Stop the normal
+service first — two copies polling one account doubles the request rate.
+
+Either way, send the whole `capture` folder to whoever is helping you. It
+contains real job listings and session URLs, so don't post it publicly.
+
+---
+
 ## Keeping the computer awake
 
-Windows going to sleep stops SubSniper. To prevent that while it's plugged in,
-open PowerShell and run:
+A sleeping computer is the sneakiest way for this to fail. The program isn't
+closed and doesn't crash — Windows just freezes it. No jobs are checked, no
+errors are written, and when the machine wakes it carries on as if nothing
+happened. From the outside that looks exactly like "there were no jobs
+tonight."
 
-```
-powercfg /change standby-timeout-ac 0
-```
+SubSniper now asks Windows to stay awake on its own whenever it's running, the
+same way a video player stops your screen locking mid-film. It lets the
+*screen* sleep — nobody's watching it — but keeps the machine itself running.
+You shouldn't have to do anything.
 
-Also worth checking Settings → System → Power that the screen can sleep but the
-computer doesn't.
+Two things it can't override, both worth checking once:
+
+- **The lid.** On a laptop, closing the lid can sleep the machine regardless.
+  Settings → System → Power → "When I close the lid" → **Do nothing**. Or just
+  leave it open.
+- **Hibernate**, which is a different setting from sleep. In PowerShell:
+
+  ```
+  powercfg /change hibernate-timeout-ac 0
+  powercfg /change hibernate-timeout-dc 0
+  ```
+
+To check whether any of this actually bit you, run `doctor` and read section
+**1c** (what the machine's sleep settings are) alongside section **5**, which
+lists coverage gaps — stretches where SubSniper wasn't checking. A gap that
+matches your sleep timeout is your answer.
 
 ---
 

@@ -24,10 +24,12 @@ logged, echoed, or persisted anywhere by this code.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +44,7 @@ from playwright.async_api import (
 
 from .config import Config
 from .models import Job
-from .parser import looks_logged_out, parse_jobs
+from .parser import JOBS_CONTAINER, looks_logged_out, parse_jobs
 
 log = logging.getLogger(__name__)
 
@@ -80,6 +82,29 @@ _BROWSER_DEAD_SIGNS = (
 def _looks_like_dead_browser(message: str) -> bool:
     lowered = str(message).lower()
     return any(sign in lowered for sign in _BROWSER_DEAD_SIGNS)
+
+
+
+_JOB_WORDS = ("job", "assignment", "absence", "available", "vacanc", "sub")
+
+
+def _unique_job_urls(calls: list[dict[str, Any]]) -> list[str]:
+    """Job-like URLs, deduped, in the order first seen."""
+    seen: dict[str, None] = {}
+    for c in calls:
+        if _looks_job_related(c):
+            seen.setdefault(str(c.get("url", "")), None)
+    return list(seen)
+
+
+def _looks_job_related(call: dict[str, Any]) -> bool:
+    """Score an XHR as plausibly the job feed, by URL or response body.
+
+    Deliberately loose. A false positive costs one line of output; a false
+    negative costs another day.
+    """
+    haystack = (str(call.get("url", "")) + " " + str(call.get("body_head", ""))).lower()
+    return any(word in haystack for word in _JOB_WORDS)
 
 
 def browser_profile_dir(cfg: Config) -> Path:
@@ -345,6 +370,196 @@ class FrontlineClient:
                     f"the browser is no longer running: {exc}"
                 ) from exc
             raise TransientError(f"both fetch paths failed: {exc}") from exc
+
+    # -- diagnostics -----------------------------------------------------------
+    async def capture(self, out_dir: Path) -> dict[str, Any]:
+        """Grab everything needed to prove what the jobs page actually contains.
+
+        Answers one question the audit log cannot: are the job rows present in
+        the HTML the server sends, or are they drawn afterwards by JavaScript?
+
+        Both of `_fetch`'s paths retrieve raw HTML and neither runs page
+        scripts. If the rows are client-side rendered, every poll parses an
+        empty template and reports zero jobs forever, while a human looking at
+        the same URL in Chrome sees a full list. That failure is invisible from
+        the outside: the request is fast, the status is 200, nothing errors.
+
+        So: fetch the page both ways, run the parser over each, and record the
+        network calls the rendered page makes. If rendered has rows that raw
+        does not, the parser is aimed at the wrong artifact - and the recorded
+        XHR list contains the endpoint we should be reading instead.
+        """
+        assert self._ctx is not None and self._page is not None
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        origin = self._origin or "https://absencesub.frontlineeducation.com"
+        url = _join(origin, JOBS_PATH)
+        report: dict[str, Any] = {"url": url}
+
+        # 1. exactly what the poller sees
+        status, raw_html, latency = await self._fetch(url)
+        (out_dir / "raw.html").write_text(raw_html, encoding="utf-8")
+        report["raw"] = {
+            "status": status,
+            "bytes": len(raw_html),
+            "latency_ms": latency,
+            "jobs_parsed": len(parse_jobs(raw_html)),
+        }
+
+        # 2. what a human sees, after scripts run
+        calls: list[dict[str, Any]] = []
+
+        async def _on_response(resp: Any) -> None:
+            try:
+                rtype = resp.request.resource_type
+                if rtype not in ("xhr", "fetch"):
+                    return
+                entry = {
+                    "method": resp.request.method,
+                    "url": resp.url,
+                    "status": resp.status,
+                    "type": resp.headers.get("content-type", "")[:60],
+                }
+                body = ""
+                try:
+                    body = await resp.text()
+                except Exception:  # noqa: BLE001 - body may be gone already
+                    pass
+                entry["bytes"] = len(body)
+                entry["body_head"] = body[:400]
+                calls.append(entry)
+            except Exception:  # noqa: BLE001 - diagnostics must never throw
+                pass
+
+        self._page.on("response", lambda r: asyncio.ensure_future(_on_response(r)))
+        try:
+            await self._page.goto(url, wait_until="networkidle", timeout=60_000)
+        except Exception as exc:  # noqa: BLE001
+            report["goto_error"] = str(exc)[:300]
+        await self._page.wait_for_timeout(3_000)
+
+        rendered = await self._page.content()
+        (out_dir / "rendered.html").write_text(rendered, encoding="utf-8")
+        report["rendered"] = {
+            "bytes": len(rendered),
+            "jobs_parsed": len(parse_jobs(rendered)),
+        }
+        report["xhr"] = calls
+        (out_dir / "network.json").write_text(
+            json.dumps(calls, indent=2)[:2_000_000], encoding="utf-8"
+        )
+
+        # Structural evidence, which - unlike a job count - is available even
+        # when nothing is posted. Open jobs survive 30-60 seconds, so a human
+        # cannot reliably run this while one is up. These markers do not need
+        # one.
+        report["markers"] = {
+            "raw_has_container": JOBS_CONTAINER.lstrip("#") in raw_html,
+            "raw_has_template": "jobTemplate" in raw_html,
+            "rendered_has_container": JOBS_CONTAINER.lstrip("#") in rendered,
+            "rendered_has_template": "jobTemplate" in rendered,
+            "job_like_xhr": _unique_job_urls(calls),
+        }
+        return report
+
+    async def watch_for_discrepancy(
+        self,
+        out_dir: Path,
+        interval: float,
+        on_hit: Any = None,
+        stop_after_first: bool = True,
+    ) -> int:
+        """Sit on the jobs page and dump evidence the moment a job appears.
+
+        Open jobs survive 30-60 seconds. A human cannot notice one, switch to a
+        terminal and run a command inside that window - which is exactly why
+        twelve days went by without anyone catching the app in the act.
+
+        A machine can. This reloads the page on a short cycle and, the instant
+        either view shows a job, writes a full before/after bundle: the raw
+        HTML the poller would have parsed, the rendered DOM a human sees, and
+        every background call the page made. If raw is empty while rendered is
+        not, that pair is the proof.
+
+        Returns the number of hits captured.
+        """
+        assert self._ctx is not None and self._page is not None
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        origin = self._origin or "https://absencesub.frontlineeducation.com"
+        url = _join(origin, JOBS_PATH)
+
+        calls: list[dict[str, Any]] = []
+
+        async def _on_response(resp: Any) -> None:
+            try:
+                if resp.request.resource_type not in ("xhr", "fetch"):
+                    return
+                body = ""
+                try:
+                    body = await resp.text()
+                except Exception:  # noqa: BLE001
+                    pass
+                calls.append({
+                    "ts": datetime.now().isoformat(timespec="seconds"),
+                    "method": resp.request.method,
+                    "url": resp.url,
+                    "status": resp.status,
+                    "type": resp.headers.get("content-type", "")[:60],
+                    "bytes": len(body),
+                    "body_head": body[:2000],
+                })
+                del calls[:-400]
+            except Exception:  # noqa: BLE001
+                pass
+
+        self._page.on("response", lambda r: asyncio.ensure_future(_on_response(r)))
+
+        hits = 0
+        checks = 0
+        while True:
+            checks += 1
+            try:
+                status, raw_html, _ = await self._fetch(url)
+                raw_n = len(parse_jobs(raw_html))
+
+                await self._page.goto(url, wait_until="networkidle", timeout=45_000)
+                rendered = await self._page.content()
+                rend_n = len(parse_jobs(rendered))
+            except Exception as exc:  # noqa: BLE001 - a watcher that dies is useless
+                log.warning("check %d failed (%s); continuing", checks, str(exc)[:160])
+                await asyncio.sleep(interval)
+                continue
+
+            log.info("check %d: raw=%d rendered=%d", checks, raw_n, rend_n)
+
+            if raw_n or rend_n:
+                hits += 1
+                stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+                hit_dir = out_dir / f"hit-{stamp}"
+                hit_dir.mkdir(parents=True, exist_ok=True)
+                (hit_dir / "raw.html").write_text(raw_html, encoding="utf-8")
+                (hit_dir / "rendered.html").write_text(rendered, encoding="utf-8")
+                (hit_dir / "network.json").write_text(
+                    json.dumps(calls, indent=2)[:4_000_000], encoding="utf-8"
+                )
+                (hit_dir / "summary.json").write_text(json.dumps({
+                    "captured": stamp, "url": url, "http_status": status,
+                    "raw_jobs": raw_n, "rendered_jobs": rend_n,
+                    "job_like_xhr": _unique_job_urls(calls),
+                }, indent=2), encoding="utf-8")
+
+                log.warning("HIT: raw=%d rendered=%d - evidence written to %s",
+                            raw_n, rend_n, hit_dir)
+                if on_hit is not None:
+                    try:
+                        on_hit(raw_n, rend_n, hit_dir)
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning("hit notification failed: %s", exc)
+                if stop_after_first:
+                    return hits
+
+            await asyncio.sleep(interval)
 
     # -- accept ----------------------------------------------------------------
     async def accept(self, job: Job) -> tuple[bool, str]:

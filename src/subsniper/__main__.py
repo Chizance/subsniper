@@ -49,6 +49,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     cfg = load_config(args.config, args.env)
     _setup_logging(cfg, args.verbose)
 
+    # A sleeping laptop looks identical to a working one from the outside.
+    from .keepawake import keep_system_awake
+
+    logging.getLogger(__name__).info("stay-awake: %s", keep_system_awake())
+
     poller = Poller(cfg, once=args.once)
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -214,6 +219,144 @@ def cmd_version(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_capture(args: argparse.Namespace) -> int:
+    """Prove whether the job rows are in the HTML or drawn later by JavaScript.
+
+    Run this when the audit log shows polls succeeding but zero jobs, ever.
+    Best run at a moment when a job is visible in Frontline in a browser.
+    """
+    cfg = load_config(args.config, args.env, require_credentials=True)
+    _setup_logging(cfg, args.verbose)
+
+    from .frontline import FrontlineClient
+
+    out_dir = cfg.root / "capture"
+
+    async def _go() -> dict:
+        client = FrontlineClient(cfg)
+        try:
+            await client.start()
+            return await client.capture(out_dir)
+        finally:
+            await client.close()
+
+    if args.watch:
+        return _capture_watch(cfg, out_dir, args)
+
+    report = asyncio.run(_go())
+
+    raw, rend = report.get("raw", {}), report.get("rendered", {})
+    print()
+    print("=" * 62)
+    print("CAPTURE RESULT")
+    print("=" * 62)
+    print(f"url                      : {report.get('url')}")
+    print(f"raw HTML (what we poll)  : HTTP {raw.get('status')}, "
+          f"{raw.get('bytes')} bytes, {raw.get('jobs_parsed')} job(s) parsed")
+    print(f"rendered (what you see)  : {rend.get('bytes')} bytes, "
+          f"{rend.get('jobs_parsed')} job(s) parsed")
+    if report.get("goto_error"):
+        print(f"page load warning        : {report['goto_error']}")
+    print()
+
+    r_n, d_n = raw.get("jobs_parsed", 0), rend.get("jobs_parsed", 0)
+    if d_n > r_n:
+        print("VERDICT: the jobs are drawn by JavaScript after the page loads.")
+        print("  The poller reads raw HTML, so it will never see them. The XHR")
+        print("  list below is where the data really comes from.")
+    elif d_n == 0 and r_n == 0:
+        # No jobs posted right now - the normal case, since open jobs last
+        # under a minute. The structural markers still carry a verdict.
+        marks = report.get("markers", {})
+        job_xhr = marks.get("job_like_xhr", [])
+        print("No jobs are posted right now, so the counts can't decide it.")
+        print("  Structure, which doesn't need a live job:")
+        print(f"    raw HTML has the job container   : {marks.get('raw_has_container')}")
+        print(f"    raw HTML has a client template   : {marks.get('raw_has_template')}")
+        print(f"    rendered has the job container   : {marks.get('rendered_has_container')}")
+        print(f"    background calls that look job-y : {len(job_xhr)}")
+        for u in job_xhr[:10]:
+            print(f"      {u[:100]}")
+        print()
+        if job_xhr:
+            print("VERDICT (strong): the page asks a background endpoint for its")
+            print("  jobs, so the list is built by JavaScript. Raw HTML will never")
+            print("  contain rows. Those URLs are what we should be reading.")
+        elif marks.get("raw_has_template"):
+            print("VERDICT (likely): raw HTML ships a client-side template, which")
+            print("  means rows are drawn by JavaScript and we parse the empty")
+            print("  blueprint. Run --watch to catch a live job and confirm.")
+        else:
+            print("VERDICT: inconclusive. Run --watch to catch the next real job.")
+    else:
+        print("VERDICT: raw HTML carries the jobs. Parsing is on the right page.")
+
+    calls = report.get("xhr", [])
+    print()
+    print(f"background data calls the page made: {len(calls)}")
+    for c in calls:
+        print(f"  {c.get('status')} {c.get('method'):<5} {c.get('bytes'):>7}b  {c.get('url','')[:88]}")
+    print()
+    print(f"Saved to: {out_dir}")
+    print("  raw.html      - exactly what the poller parses")
+    print("  rendered.html - the page after scripts ran")
+    print("  network.json  - every background call, with response bodies")
+    print()
+    print("These files contain your job listings and session-specific URLs.")
+    print("Send them to whoever is helping you, but don't post them publicly.")
+    return 0
+
+
+def _capture_watch(cfg, out_dir, args) -> int:
+    """Sit on the jobs page until a job shows up, then dump the evidence.
+
+    Exists because open jobs last 30-60 seconds. Asking a person to notice one
+    and run a command inside that window is asking them to lose.
+    """
+    from .frontline import FrontlineClient
+    from .notify import Notifier
+    from .state import Store
+
+    store = Store(cfg.root)
+    if store.another_instance_running():
+        print("SubSniper is already running. Stop it first - two copies polling")
+        print(f"one account doubles the request rate. Lock file: {store.lock_path}")
+        return 1
+
+    notifier = Notifier(cfg)
+
+    def _on_hit(raw_n: int, rend_n: int, hit_dir) -> None:
+        verdict = ("CONFIRMED: raw HTML had none, the rendered page had them"
+                   if rend_n > raw_n else
+                   f"raw={raw_n} rendered={rend_n}")
+        notifier.heartbeat(f"SubSniper capture caught a job. {verdict}. Saved to {hit_dir.name}")
+
+    async def _go() -> int:
+        client = FrontlineClient(cfg)
+        try:
+            await client.start()
+            return await client.watch_for_discrepancy(
+                out_dir, interval=args.interval,
+                on_hit=_on_hit, stop_after_first=not args.keep_going,
+            )
+        finally:
+            await client.close()
+            notifier.close()
+
+    print(f"Watching for a job every {args.interval:.0f}s. Leave this running")
+    print("during a time jobs get posted - the morning rush is ideal.")
+    print("Your phone will buzz the moment it catches one. Ctrl+C to stop.")
+    print()
+    try:
+        hits = asyncio.run(_go())
+    except KeyboardInterrupt:
+        print("\nStopped.")
+        return 0
+    print(f"\nCaptured {hits} hit(s) into {out_dir}")
+    print("Send me the whole folder.")
+    return 0
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     """Collect everything needed to diagnose a problem into one file.
 
@@ -224,6 +367,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     Credential VALUES are never included - only whether each one is set.
     """
     import platform
+    import subprocess
     from collections import Counter
 
     out: list[str] = []
@@ -278,7 +422,6 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
     # Chromium must actually launch, not just import.
     try:
-        import subprocess
         r = subprocess.run([sys.executable, "-m", "playwright", "--version"],
                            capture_output=True, text=True, timeout=30)
         w(f"  playwright CLI    : {(r.stdout or r.stderr).strip() or 'no output'}")
@@ -306,6 +449,41 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             w("not inside a known cloud-synced folder - good")
     except Exception as exc:  # noqa: BLE001
         w(f"could not determine profile dir: {exc}")
+
+    # -- 1c. sleep ------------------------------------------------------------
+    # A machine that sleeps overnight produces no polls, no errors, and no
+    # clue. It is the one failure that looks exactly like "there were no jobs".
+    section("1c. WILL THIS MACHINE STAY AWAKE")
+    if platform.system() != "Windows":
+        w("not Windows - skipping sleep check")
+    else:
+        try:
+            r = subprocess.run(["powercfg", "/query", "SCHEME_CURRENT",
+                                "SUB_SLEEP", "STANDBYIDLE"],
+                               capture_output=True, text=True, timeout=30)
+            text = r.stdout or ""
+            ac = dc = None
+            for line in text.splitlines():
+                low = line.lower()
+                if "current ac power setting index" in low:
+                    ac = int(line.split(":")[-1].strip(), 16)
+                elif "current dc power setting index" in low:
+                    dc = int(line.split(":")[-1].strip(), 16)
+            def _fmt(v):
+                if v is None:
+                    return "could not read"
+                return "Never" if v == 0 else f"after {v // 60} min"
+            w(f"sleep when plugged in : {_fmt(ac)}")
+            w(f"sleep on battery      : {_fmt(dc)}")
+            if (ac or 0) > 0 or (dc or 0) > 0:
+                w()
+                w("  SubSniper asks Windows to stay awake while it runs, so these")
+                w("  settings should not bite. If you still see coverage gaps in")
+                w("  section 5 that line up with the numbers above, set them to")
+                w("  Never in Settings > System > Power, and check what the lid")
+                w("  is set to do - closing it can sleep the machine regardless.")
+        except Exception as exc:  # noqa: BLE001
+            w(f"could not read power settings: {exc}")
 
     section("2. IS IT RUNNING RIGHT NOW")
     try:
@@ -684,6 +862,15 @@ def main(argv: list[str] | None = None) -> int:
     p_doc.add_argument("--no-network", action="store_true",
                        help="skip the live Pushover and Frontline tests")
     p_doc.set_defaults(func=cmd_doctor)
+
+    p_cap = sub.add_parser("capture", help="prove whether jobs are in the HTML or drawn by JS")
+    p_cap.add_argument("--watch", action="store_true",
+                       help="keep checking and auto-capture the next live job")
+    p_cap.add_argument("--interval", type=float, default=15.0,
+                       help="seconds between checks in --watch mode (default 15)")
+    p_cap.add_argument("--keep-going", action="store_true",
+                       help="don't stop after the first catch")
+    p_cap.set_defaults(func=cmd_capture)
 
     p_diag = sub.add_parser("diagnose", help="read the audit log and report what happened")
     p_diag.add_argument("--days", type=int, default=2, help="how far back to look (default 2)")
